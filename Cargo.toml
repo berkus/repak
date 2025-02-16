@@ -1,7 +1,17 @@
 [package]
 name = "repak"
 version = "0.1.0"
-edition = "2024"
+authors = ["Berkus Decker <berkus+crates@metta.systems>"]
 description = "REPAK asset library format support"
+edition = "2024"
+repository = "https://github.com/berkus/repak"
+license = "MIT OR Apache-2.0"
+keywords = ["games", "assets"]
+categories = [
+    "filesystem",
+    "development-tools",
+    "game-development",
+    "parser-implementations",
+]
 
 [dependencies]
