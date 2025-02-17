@@ -1,0 +1,29 @@
+{
+  "global_options": {
+    "compression": "best",
+    "encryption": "none",
+    "checksums": ["sha3"]
+  },
+  "assets": [
+    {
+      "path": "../assets/README.md",
+      "name": "readme",
+      "checksums": ["seahash"]
+    },
+    {
+      "path": "../assets/lenna.png",
+      "name": "test image"
+    },
+    {
+      "path": "../assets/teapot.fbx",
+      "name": "teapot",
+      "compression": "zstd",
+      "checksums": ["sha3", "seahash", "blake3-256"]
+    },
+    {
+      "path": "../assets/waves.mp4",
+      "name": "video",
+      "compression": "none"
+    }
+  ]
+}
