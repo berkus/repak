@@ -1,7 +1,18 @@
 use {
+    crate::io::Deser,
     culpa::throws,
-    std::path::{Path, PathBuf},
+    std::{
+        collections::BTreeMap,
+        fs,
+        io::Read,
+        path::{Path, PathBuf},
+    },
 };
+
+mod checksum;
+mod compress;
+mod encrypt;
+mod io;
 
 pub enum Error {}
 
@@ -10,6 +21,7 @@ pub enum Error {}
 /// Open or create a repak archive, lookup or append files, save.
 /// Encrypt, compress, checksum.
 pub struct REPAK {
+    index: BTreeMap<String, IndexEntry>,
     index_attached: bool,
     file_path: PathBuf,
 }
@@ -25,6 +37,7 @@ pub struct Entry {}
 #[throws]
 pub fn create(output: &Path) -> REPAK {
     REPAK {
+        index: BTreeMap::new(),
         index_attached: false,
         file_path: output.to_path_buf(),
     }
@@ -33,11 +46,29 @@ pub fn create(output: &Path) -> REPAK {
 /// Open a repak archive.
 #[throws]
 pub fn open(input: &Path) -> REPAK {
-    // if input exists, open it
-    let index_attached = true;
-    // if input exists, check for and idpak file beside it - if it exists, index_attached: false
+    let (index, attached) = if fs::exists(input)? {
+        // check for an idpak file beside it
+        let idpak = input.with_extension("idpak");
+        if fs::exists(&idpak)? {
+            // if it exists, open it
+            let index = fs::read(&idpak)?; // @todo wrap in BufReader
+            (index, false)
+        } else {
+            let input = fs::open(input); // @todo wrap in BufReader
+            seek(10, fromEND);
+            buf = read(10);
+            reverse(buf);
+            let X = read_uleb64(buf);
+            seek(X, fromEND);
+            let index = read!();
+            (index, true)
+        }
+    } else {
+        return Err(NoFile);
+    };
     REPAK {
-        index_attached,
+        index,
+        index_attached: attached,
         file_path: input.to_path_buf(),
     }
 }
@@ -45,14 +76,14 @@ pub fn open(input: &Path) -> REPAK {
 impl REPAK {
     /// Lookup a file in the archive.
     #[throws]
-    pub fn lookup(id: String) -> Entry {}
+    pub fn lookup(&self, id: String) -> Entry {}
 
     /// Append a file to the archive.
-    pub fn append(id: String, file: &Path) {}
+    pub fn append(&mut self, id: String, file: &Path) {}
 
     /// Save the archive.
     #[throws]
-    pub fn save() {}
+    pub fn save(&self) {}
 
     // save_index()?
 
@@ -76,9 +107,40 @@ struct IndexEntry {
     checksum: Option<ChecksumHeader>,
 }
 
+impl Deser for IndexEntry {
+    fn deser(&mut r: impl Read) -> Result<Self, Error> {
+        let offset = leb128::read::unsigned(r)?;
+        let size = leb128::read::unsigned(r)?;
+        let flags = leb128::read::unsigned(r)?;
+        let name_len = leb128::read::unsigned(r)?;
+        let mut data = vec![0; name_len];
+        r.read_exact(&mut data);
+        let name = String::from_utf8(data)?;
+        let encryption = EncryptionHeader::deser(r)?;
+        let compression = CompressionHeader::deser(r)?;
+        let checksum = ChecksumHeader::deser(r)?;
+
+        Ok(Self {
+            offset,
+            size,
+            flags,
+            name,
+            encryption,
+            compression,
+            checksum,
+        })
+    }
+}
+
 struct EncryptionHeader {
     size: u32,
     algorithm: EncryptionAlgorithm,
+}
+
+impl Deser for EncryptionHeader {
+    fn deser(&mut r: impl Read) -> Result<Self, Error> {
+        let size = leb128::read::unsigned(r)?;
+    }
 }
 
 enum EncryptionAlgorithm {
@@ -88,6 +150,12 @@ enum EncryptionAlgorithm {
 struct CompressionHeader {
     size: u32,
     algorithm: CompressionAlgorithm,
+}
+
+impl Deser for CompressionHeader {
+    fn deser(&mut r: impl Read) -> Result<Self, Error> {
+        let size = leb128::read::unsigned(r)?;
+    }
 }
 
 enum CompressionAlgorithm {
@@ -107,9 +175,33 @@ struct ChecksumHeader {
     checksums: Vec<Checksum>,
 }
 
+impl Deser for ChecksumHeader {
+    fn deser(&mut r: impl Read) -> Result<Self, Error> {
+        let size = leb128::read::unsigned(r)?;
+        let count = leb128::read::unsigned(r)?;
+        let mut checksums = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            checksums.push(Checksum::deser(r)?);
+        }
+        Ok(Self {
+            size,
+            count,
+            checksums,
+        })
+    }
+}
+
 struct Checksum {
     kind: ChecksumKind,
     value: u64, // @todo
+}
+
+impl Deser for Checksum {
+    fn deser(&mut r: impl Read) -> Result<Self, Error> {
+        let kind = leb128::read::unsigned(r)?;
+        let value = leb128::read::unsigned(r)?;
+        Ok(Self { kind, value })
+    }
 }
 
 enum ChecksumKind {
