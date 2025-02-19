@@ -61,7 +61,7 @@ impl Deser for Checksum {
             ChecksumKind::K12 => vec![],
             ChecksumKind::BLAKE3 => vec![],
             ChecksumKind::Xxhash3 => vec![],
-            ChecksumKind::Metrohash => vec![],
+            ChecksumKind::MetroHash => vec![],
             ChecksumKind::SeaHash => vec![],
             ChecksumKind::CityHash => vec![],
         };
@@ -70,12 +70,12 @@ impl Deser for Checksum {
 }
 
 #[derive(Clone, Copy)]
-enum ChecksumKind {
+pub enum ChecksumKind {
     SHA3 = 1,
     K12 = 2,
     BLAKE3 = 3,
     Xxhash3 = 4,
-    Metrohash = 5,
+    MetroHash = 5,
     SeaHash = 6,
     CityHash = 7,
 }
@@ -89,7 +89,7 @@ impl TryFrom<u64> for ChecksumKind {
             2 => Ok(Self::K12),
             3 => Ok(Self::BLAKE3),
             4 => Ok(Self::Xxhash3),
-            5 => Ok(Self::Metrohash),
+            5 => Ok(Self::MetroHash),
             6 => Ok(Self::SeaHash),
             7 => Ok(Self::CityHash),
             _ => Err(Error::Deser(format!("Unknown checksum kind: {}", value))),

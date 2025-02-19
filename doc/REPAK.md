@@ -22,7 +22,7 @@ Asset library format similar in idea to Quake PAK or DOOM WAD files. The file is
 
 Immediately following the last index entry is the index offset field at the file end.
 
-When attached to the REPAK file, the index is usually compressed using `lzma`. A stand-alone index may be uncompressed, this can be checked by reading the format marker.
+When attached to the REPAK file, the index is usually compressed using `zstd`. A stand-alone index may be uncompressed, this can be checked by reading the format marker.
 
 The recommended extension for REPAK files is `.repak`.
 Index stored separately shall have the `.idpak` extension.
@@ -31,7 +31,7 @@ If an `.idpak` file is present, it is given preference - as detecting the presen
 
 # Index entry
 
-Entries are variable sized, 
+Entries are variable sized,
 
 | Offset | Size            | Content           | Description                                                                                                                                                                                  |
 | ------ | --------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

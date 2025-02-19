@@ -16,6 +16,8 @@ mod compress;
 mod encrypt;
 mod io;
 
+pub use {checksum::ChecksumKind, compress::CompressionAlgorithm, encrypt::EncryptionAlgorithm};
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("File I/O error: {0}")]
@@ -30,6 +32,8 @@ pub enum Error {
     FileNotFound(PathBuf),
     #[error("Failed to deserialize object: {0}")]
     Deser(String),
+    #[error("Asset {0} already exists in the archive")]
+    AlreadyExists(String),
 }
 
 /// Public interface
@@ -40,6 +44,7 @@ pub struct REPAK {
     index: IndexHeader,
     index_attached: bool,
     file_path: PathBuf,
+    last_insertion_offset: u64,
 }
 
 /// Reference to a single resource in the archive.
@@ -58,6 +63,7 @@ pub fn create(output: &Path) -> REPAK {
         index: IndexHeader::default(),
         index_attached: false,
         file_path: output.to_path_buf(),
+        last_insertion_offset: 0,
     }
 }
 
@@ -69,10 +75,10 @@ pub fn open(input: &Path) -> REPAK {
     }
     // check for an idpak file beside it
     let idpak = input.with_extension("idpak");
-    let (index, attached) = if fs::exists(&idpak)? {
+    let (index, attached, insert_pos) = if fs::exists(&idpak)? {
         let mut input = BufReader::new(File::open(idpak)?);
         let index = IndexHeader::deser(&mut input)?; // @todo compressed index
-        (index, false)
+        (index, false, 0u64)
     } else {
         let mut input = BufReader::new(File::open(input)?);
         input.seek(SeekFrom::End(-10))?;
@@ -82,27 +88,49 @@ pub fn open(input: &Path) -> REPAK {
         let mut cursor = Cursor::new(&buf);
         let offset = i64::try_from(leb128::read::unsigned(&mut cursor)?)?;
         input.seek(SeekFrom::End(-offset))?;
+        let insert_pos = input.stream_position()?;
         let index = IndexHeader::deser(&mut input)?; // @todo compressed index
-        (index, true)
+        (index, true, insert_pos)
     };
     REPAK {
         index,
         index_attached: attached,
         file_path: input.to_path_buf(),
+        last_insertion_offset: insert_pos,
     }
 }
 
 impl REPAK {
     /// Lookup a file in the archive.
+    ///
+    /// Returns a reference to the file entry.
     #[throws]
-    pub fn lookup(&self, _id: String) -> Entry {
-        Entry {
-            inner: IndexEntry::default(), //@todo remove Default impl from IndexEntry
-        }
+    pub fn lookup(&self, id: String) -> Option<Entry> {
+        self.index.entries.get(&id).map(|inner| Entry { inner })
     }
 
     /// Append a file to the archive.
-    pub fn append(&mut self, _id: String, _file: &Path) {}
+    ///
+    /// Append options specify how to transform the file when adding.
+    /// It is posible to request checksumming, compression, and encryption
+    /// (in this order).
+    #[throws]
+    pub fn append(&mut self, id: String, file: &Path) {
+        if self.index.entries.contains_key(&id) {
+            throw!(Error::AlreadyExists(id));
+        }
+        let entry = IndexEntry {
+            offset: self.last_insertion_offset,
+            size: file.metadata()?.len(),
+            name: id.clone(),
+            encryption: None,
+            compression: None,
+            checksum: None,
+        };
+        // @todo copy file data to archive
+        self.last_insertion_offset += entry.size;
+        self.index.entries.insert(id, entry);
+    }
 
     /// Save the archive.
     #[throws]
@@ -137,6 +165,14 @@ impl Deser for IndexHeader {
     fn deser(r: &mut impl Read) -> Result<Self, Error> {
         let mut buf = [0u8; 5];
         r.read_exact(&mut buf)?;
+        // if first four bytes are "0x28, 0xB5, 0x2F, 0xFD" then it's `zstd` compressed
+        // if &buf == b"\x28\xb5\x2f\xfd" { // @todo
+        //    let mut decoder = zstd::Decoder::new(r)?;
+        //   let mut decoded = Vec::new();
+        // decoder.read_to_end(&mut decoded)?;
+        // r = Cursor::new(decoded);
+        // return IndexHeader::deser(r); // call itself to parse decompressed data
+        // }
         if &buf != b"REPAK" {
             return Err(Error::Deser("Not a REPAK archive".to_string()));
         }

@@ -44,7 +44,7 @@ impl Deser for CompressionHeader {
 }
 
 #[derive(Clone, Copy)]
-enum CompressionAlgorithm {
+pub enum CompressionAlgorithm {
     NoCompression,
     Deflate,
     Bzip,

@@ -38,7 +38,7 @@ impl Deser for EncryptionHeader {
 }
 
 #[derive(Clone, Copy)]
-enum EncryptionAlgorithm {
+pub enum EncryptionAlgorithm {
     NotImplementedYet,
 }
 

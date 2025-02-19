@@ -8,7 +8,7 @@
     {
       "path": "../assets/README.md",
       "name": "readme",
-      "checksums": ["seahash"]
+      "checksums": ["seahash", "k12-256"]
     },
     {
       "path": "../assets/lenna.png",
