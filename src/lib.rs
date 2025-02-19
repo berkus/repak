@@ -14,7 +14,13 @@ mod compress;
 mod encrypt;
 mod io;
 
-pub enum Error {}
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("File I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Failed to deserialize object: {0}")]
+    Deser(String),
+}
 
 /// Public interface
 ///
@@ -29,7 +35,9 @@ pub struct REPAK {
 /// Reference to a single resource in the archive.
 ///
 /// Allows you to validate, decrypt, decompress, extract data.
-pub struct Entry {}
+pub struct Entry {
+    inner: IndexEntry,
+}
 
 /// Create a new repak archive.
 ///
@@ -140,11 +148,27 @@ struct EncryptionHeader {
 impl Deser for EncryptionHeader {
     fn deser(&mut r: impl Read) -> Result<Self, Error> {
         let size = leb128::read::unsigned(r)?;
+        let algorithm = EncryptionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
+        Ok(Self { size, algorithm })
     }
 }
 
 enum EncryptionAlgorithm {
     NotImplementedYet = 0,
+}
+
+impl TryFrom<u64> for EncryptionAlgorithm {
+    type Error = Error;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::NotImplementedYet),
+            _ => Err(Error::Deser(format!(
+                "Unknown encryption algorithm: {}",
+                value
+            ))),
+        }
+    }
 }
 
 struct CompressionHeader {
@@ -155,18 +179,39 @@ struct CompressionHeader {
 impl Deser for CompressionHeader {
     fn deser(&mut r: impl Read) -> Result<Self, Error> {
         let size = leb128::read::unsigned(r)?;
+        let algorithm = CompressionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
+        Ok(Self { size, algorithm })
     }
 }
 
 enum CompressionAlgorithm {
     NoCompression = 0,
     Deflate = 1,
-    Gzip = 2,
-    Bzip = 3,
-    Zstd = 4,
-    Lzma = 5,
-    Lz4 = 6,
-    Fsst = 7,
+    Bzip = 2,
+    Zstd = 3,
+    Lzma = 4,
+    Lz4 = 5,
+    Fsst = 6,
+}
+
+impl TryFrom<u64> for CompressionAlgorithm {
+    type Error = Error;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::NoCompression),
+            1 => Ok(Self::Deflate),
+            2 => Ok(Self::Bzip),
+            3 => Ok(Self::Zstd),
+            4 => Ok(Self::Lzma),
+            5 => Ok(Self::Lz4),
+            6 => Ok(Self::Fsst),
+            _ => Err(Error::Deser(format!(
+                "Unknown compression algorithm: {}",
+                value
+            ))),
+        }
+    }
 }
 
 struct ChecksumHeader {
@@ -212,4 +257,21 @@ enum ChecksumKind {
     Metrohash = 5,
     SeaHash = 6,
     CityHash = 7,
+}
+
+impl TryFrom<u64> for ChecksumKind {
+    type Error = Error;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::SHA3),
+            2 => Ok(Self::K12),
+            3 => Ok(Self::BLAKE3),
+            4 => Ok(Self::Xxhash3),
+            5 => Ok(Self::Metrohash),
+            6 => Ok(Self::SeaHash),
+            7 => Ok(Self::CityHash),
+            _ => Err(Error::Deser(format!("Unknown checksum kind: {}", value))),
+        }
+    }
 }
