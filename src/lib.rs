@@ -1,7 +1,5 @@
-#![feature(let_chains)]
-
 use {
-    crate::io::Deser,
+    crate::{checksum::*, compress::*, encrypt::*, io::Deser},
     byteorder::*,
     culpa::{throw, throws},
     io::Ser,
@@ -77,13 +75,13 @@ pub fn open(input: &Path) -> REPAK {
         (index, false)
     } else {
         let mut input = BufReader::new(File::open(input)?);
-        input.seek(SeekFrom::End(-10));
+        input.seek(SeekFrom::End(-10))?;
         let mut buf = [0u8; 10];
-        input.read_exact(&mut buf);
+        input.read_exact(&mut buf)?;
         buf.reverse();
         let mut cursor = Cursor::new(&buf);
         let offset = i64::try_from(leb128::read::unsigned(&mut cursor)?)?;
-        input.seek(SeekFrom::End(-offset));
+        input.seek(SeekFrom::End(-offset))?;
         let index = IndexHeader::deser(&mut input)?; // @todo compressed index
         (index, true)
     };
@@ -118,7 +116,6 @@ impl REPAK {
 
 #[derive(Default)]
 struct IndexHeader {
-    version: u8,
     count: u64,
     size: u64,
     entries: BTreeMap<String, IndexEntry>, // not part of IndexHeader really, but we can construct it here and move?
@@ -128,7 +125,7 @@ struct IndexHeader {
 impl Ser for IndexHeader {
     fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
         w.write_all(b"REPAK")?;
-        w.write_u8(self.version)?;
+        w.write_u8(0x1)?; // Version 1
         w.write_u16::<LittleEndian>(0u16)?;
         leb128::write::unsigned(w, self.count)?;
         leb128::write::unsigned(w, self.size)?;
@@ -139,7 +136,7 @@ impl Ser for IndexHeader {
 impl Deser for IndexHeader {
     fn deser(r: &mut impl Read) -> Result<Self, Error> {
         let mut buf = [0u8; 5];
-        r.read_exact(&mut buf);
+        r.read_exact(&mut buf)?;
         if &buf != b"REPAK" {
             return Err(Error::Deser("Not a REPAK archive".to_string()));
         }
@@ -165,7 +162,6 @@ impl Deser for IndexHeader {
         // @todo checksumming
 
         Ok(IndexHeader {
-            version,
             count,
             size,
             entries,
@@ -178,7 +174,6 @@ impl Deser for IndexHeader {
 struct IndexEntry {
     offset: u64,
     size: u64,
-    flags: u64,
     name: String,
     encryption: Option<EncryptionHeader>,
     compression: Option<CompressionHeader>,
@@ -195,7 +190,7 @@ impl Ser for IndexEntry {
         leb128::write::unsigned(w, self.size)?;
         leb128::write::unsigned(w, flags)?;
         leb128::write::unsigned(w, self.name.as_bytes().len() as u64)?;
-        w.write_all(&self.name.as_bytes());
+        w.write_all(&self.name.as_bytes())?;
         if let Some(encryption) = &self.encryption {
             encryption.ser(w)?
         }
@@ -216,7 +211,7 @@ impl Deser for IndexEntry {
         let flags = leb128::read::unsigned(r)?;
         let name_len = leb128::read::unsigned(r)?;
         let mut data = vec![0; name_len as usize];
-        r.read_exact(&mut data);
+        r.read_exact(&mut data)?;
         let name = String::from_utf8(data)?;
         let encryption = if flags & 0x0001 != 0 {
             Some(EncryptionHeader::deser(r)?)
@@ -237,242 +232,10 @@ impl Deser for IndexEntry {
         Ok(Self {
             offset,
             size,
-            flags,
             name,
             encryption,
             compression,
             checksum,
         })
-    }
-}
-
-struct EncryptionHeader {
-    size: u64,
-    algorithm: EncryptionAlgorithm,
-    // TODO: Encryption payload parameters
-    payload: Vec<u8>,
-}
-
-impl Ser for EncryptionHeader {
-    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
-        leb128::write::unsigned(w, self.size)?;
-        leb128::write::unsigned(w, self.algorithm.into())?;
-        w.write_all(&self.payload);
-        Ok(())
-    }
-}
-
-impl Deser for EncryptionHeader {
-    fn deser(r: &mut impl Read) -> Result<Self, Error> {
-        let size = leb128::read::unsigned(r)?;
-        let algorithm = EncryptionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
-        let payload = match algorithm {
-            EncryptionAlgorithm::NotImplementedYet => vec![],
-        };
-        Ok(Self {
-            size,
-            algorithm,
-            payload,
-        })
-    }
-}
-
-#[derive(Clone, Copy)]
-enum EncryptionAlgorithm {
-    NotImplementedYet,
-}
-
-impl From<EncryptionAlgorithm> for u64 {
-    fn from(value: EncryptionAlgorithm) -> u64 {
-        match value {
-            EncryptionAlgorithm::NotImplementedYet => 0,
-        }
-    }
-}
-
-impl TryFrom<u64> for EncryptionAlgorithm {
-    type Error = Error;
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::NotImplementedYet),
-            _ => Err(Error::Deser(format!(
-                "Unknown encryption algorithm: {}",
-                value
-            ))),
-        }
-    }
-}
-
-struct CompressionHeader {
-    size: u64,
-    algorithm: CompressionAlgorithm,
-    // TODO: Compression payload parameters
-    payload: Vec<u8>,
-}
-
-impl Ser for CompressionHeader {
-    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
-        leb128::write::unsigned(w, self.size)?;
-        leb128::write::unsigned(w, self.algorithm.into())?;
-        w.write_all(&self.payload);
-        Ok(())
-    }
-}
-
-impl Deser for CompressionHeader {
-    fn deser(r: &mut impl Read) -> Result<Self, Error> {
-        let size = leb128::read::unsigned(r)?;
-        let algorithm = CompressionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
-        let payload = match algorithm {
-            CompressionAlgorithm::NoCompression => vec![],
-            CompressionAlgorithm::Deflate => vec![],
-            CompressionAlgorithm::Bzip => vec![],
-            CompressionAlgorithm::Zstd => vec![],
-            CompressionAlgorithm::Lzma => vec![],
-            CompressionAlgorithm::Lz4 => vec![],
-            CompressionAlgorithm::Fsst => vec![],
-        };
-        Ok(Self {
-            size,
-            algorithm,
-            payload,
-        })
-    }
-}
-
-#[derive(Clone, Copy)]
-enum CompressionAlgorithm {
-    NoCompression,
-    Deflate,
-    Bzip,
-    Zstd,
-    Lzma,
-    Lz4,
-    Fsst,
-}
-
-impl From<CompressionAlgorithm> for u64 {
-    fn from(value: CompressionAlgorithm) -> u64 {
-        match value {
-            CompressionAlgorithm::NoCompression => 0,
-            CompressionAlgorithm::Deflate => 1,
-            CompressionAlgorithm::Bzip => 2,
-            CompressionAlgorithm::Zstd => 3,
-            CompressionAlgorithm::Lzma => 4,
-            CompressionAlgorithm::Lz4 => 5,
-            CompressionAlgorithm::Fsst => 6,
-        }
-    }
-}
-
-impl TryFrom<u64> for CompressionAlgorithm {
-    type Error = Error;
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::NoCompression),
-            1 => Ok(Self::Deflate),
-            2 => Ok(Self::Bzip),
-            3 => Ok(Self::Zstd),
-            4 => Ok(Self::Lzma),
-            5 => Ok(Self::Lz4),
-            6 => Ok(Self::Fsst),
-            _ => Err(Error::Deser(format!(
-                "Unknown compression algorithm: {}",
-                value
-            ))),
-        }
-    }
-}
-
-#[derive(Default)]
-struct ChecksumHeader {
-    size: u64,
-    count: u64,
-    checksums: Vec<Checksum>,
-}
-
-impl Ser for ChecksumHeader {
-    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
-        leb128::write::unsigned(w, self.size)?;
-        leb128::write::unsigned(w, self.count)?;
-        for c in &self.checksums {
-            c.ser(w)?;
-        }
-        Ok(())
-    }
-}
-
-impl Deser for ChecksumHeader {
-    fn deser(r: &mut impl Read) -> Result<Self, Error> {
-        let size = leb128::read::unsigned(r)?;
-        let count = leb128::read::unsigned(r)?;
-        let mut checksums = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            checksums.push(Checksum::deser(r)?);
-        }
-        Ok(Self {
-            size,
-            count,
-            checksums,
-        })
-    }
-}
-
-struct Checksum {
-    kind: ChecksumKind,
-    payload: Vec<u8>, // @todo
-}
-
-impl Ser for Checksum {
-    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
-        leb128::write::unsigned(w, self.kind as u64)?;
-        w.write_all(&self.payload)?;
-        Ok(())
-    }
-}
-
-impl Deser for Checksum {
-    fn deser(r: &mut impl Read) -> Result<Self, Error> {
-        let kind = ChecksumKind::try_from(leb128::read::unsigned(r)?)?;
-        let payload = match kind {
-            ChecksumKind::SHA3 => vec![],
-            ChecksumKind::K12 => vec![],
-            ChecksumKind::BLAKE3 => vec![],
-            ChecksumKind::Xxhash3 => vec![],
-            ChecksumKind::Metrohash => vec![],
-            ChecksumKind::SeaHash => vec![],
-            ChecksumKind::CityHash => vec![],
-        };
-        Ok(Self { kind, payload })
-    }
-}
-
-#[derive(Clone, Copy)]
-enum ChecksumKind {
-    SHA3 = 1,
-    K12 = 2,
-    BLAKE3 = 3,
-    Xxhash3 = 4,
-    Metrohash = 5,
-    SeaHash = 6,
-    CityHash = 7,
-}
-
-impl TryFrom<u64> for ChecksumKind {
-    type Error = Error;
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        match value {
-            1 => Ok(Self::SHA3),
-            2 => Ok(Self::K12),
-            3 => Ok(Self::BLAKE3),
-            4 => Ok(Self::Xxhash3),
-            5 => Ok(Self::Metrohash),
-            6 => Ok(Self::SeaHash),
-            7 => Ok(Self::CityHash),
-            _ => Err(Error::Deser(format!("Unknown checksum kind: {}", value))),
-        }
     }
 }
