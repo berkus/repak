@@ -8,5 +8,5 @@ pub trait Ser {
 }
 
 pub trait Deser: Sized {
-    fn deser(r: impl Read) -> Result<Self, Error>;
+    fn deser(r: &mut impl Read) -> Result<Self, Error>;
 }

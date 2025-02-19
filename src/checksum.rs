@@ -1,6 +1,16 @@
+use {
+    crate::{Error, io::Ser},
+    std::io::Write,
+};
+
 trait Checksum {
-    const Type: u16;
+    const TYPE: u16;
     const N: usize;
+
+    fn ser_type(&self, w: &mut impl Write) -> Result<(), Error> {
+        w.write_all(&Self::TYPE.to_le_bytes())?;
+        Ok(())
+    }
 }
 
 struct SHA3 {
@@ -8,19 +18,12 @@ struct SHA3 {
 }
 
 impl Checksum for SHA3 {
-    const Type: u16 = 0x0001;
+    const TYPE: u16 = 0x0001;
     const N: usize = 64;
 }
 
-impl SHA3 {
-    fn ser_type(&self, w: impl Write) -> Result<(), Error> {
-        w.write_all(&Self::Type.to_le_bytes())?;
-        Ok(())
-    }
-}
-
 impl Ser for SHA3 {
-    fn ser(&self, w: impl Write) -> Result<(), Error> {
+    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
         w.write_all(&self.digest)?;
         Ok(())
     }

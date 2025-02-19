@@ -1,11 +1,14 @@
+#![feature(let_chains)]
+
 use {
     crate::io::Deser,
-    culpa::throws,
+    byteorder::*,
+    culpa::{throw, throws},
     io::Ser,
     std::{
         collections::BTreeMap,
-        fs,
-        io::{Read, Write},
+        fs::{self, File},
+        io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
         path::{Path, PathBuf},
     },
 };
@@ -19,6 +22,14 @@ mod io;
 pub enum Error {
     #[error("File I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("LEB128 error: {0}")]
+    Leb128(#[from] leb128::read::Error),
+    #[error("Offset is too large: {0}")]
+    OffsetTooLarge(#[from] std::num::TryFromIntError),
+    #[error("Name is not a valid UTF-8 string: {0}")]
+    InvalidUtf8(#[from] std::string::FromUtf8Error),
+    #[error("File {0} not found.")]
+    FileNotFound(PathBuf),
     #[error("Failed to deserialize object: {0}")]
     Deser(String),
 }
@@ -28,7 +39,7 @@ pub enum Error {
 /// Open or create a repak archive, lookup or append files, save.
 /// Encrypt, compress, checksum.
 pub struct REPAK {
-    index: BTreeMap<String, IndexEntry>,
+    index: IndexHeader,
     index_attached: bool,
     file_path: PathBuf,
 }
@@ -46,7 +57,7 @@ pub struct Entry {
 #[throws]
 pub fn create(output: &Path) -> REPAK {
     REPAK {
-        index: BTreeMap::new(),
+        index: IndexHeader::default(),
         index_attached: false,
         file_path: output.to_path_buf(),
     }
@@ -55,25 +66,26 @@ pub fn create(output: &Path) -> REPAK {
 /// Open a repak archive.
 #[throws]
 pub fn open(input: &Path) -> REPAK {
-    let (index, attached) = if fs::exists(input)? {
-        // check for an idpak file beside it
-        let idpak = input.with_extension("idpak");
-        if fs::exists(&idpak)? {
-            // if it exists, open it
-            let index = fs::read(&idpak)?; // @todo wrap in BufReader
-            (index, false)
-        } else {
-            let input = fs::open(input); // @todo wrap in BufReader
-            seek(10, fromEND);
-            buf = read(10);
-            reverse(buf);
-            let X = read_uleb64(buf);
-            seek(X, fromEND);
-            let index = read!();
-            (index, true)
-        }
+    if !fs::exists(input)? {
+        throw!(Error::FileNotFound(input.to_path_buf()));
+    }
+    // check for an idpak file beside it
+    let idpak = input.with_extension("idpak");
+    let (index, attached) = if fs::exists(&idpak)? {
+        let mut input = BufReader::new(File::open(idpak)?);
+        let index = IndexHeader::deser(&mut input)?; // @todo compressed index
+        (index, false)
     } else {
-        return Err(NoFile);
+        let mut input = BufReader::new(File::open(input)?);
+        input.seek(SeekFrom::End(-10));
+        let mut buf = [0u8; 10];
+        input.read_exact(&mut buf);
+        buf.reverse();
+        let mut cursor = Cursor::new(&buf);
+        let offset = i64::try_from(leb128::read::unsigned(&mut cursor)?)?;
+        input.seek(SeekFrom::End(-offset));
+        let index = IndexHeader::deser(&mut input)?; // @todo compressed index
+        (index, true)
     };
     REPAK {
         index,
@@ -85,10 +97,14 @@ pub fn open(input: &Path) -> REPAK {
 impl REPAK {
     /// Lookup a file in the archive.
     #[throws]
-    pub fn lookup(&self, id: String) -> Entry {}
+    pub fn lookup(&self, _id: String) -> Entry {
+        Entry {
+            inner: IndexEntry::default(), //@todo remove Default impl from IndexEntry
+        }
+    }
 
     /// Append a file to the archive.
-    pub fn append(&mut self, id: String, file: &Path) {}
+    pub fn append(&mut self, _id: String, _file: &Path) {}
 
     /// Save the archive.
     #[throws]
@@ -100,30 +116,69 @@ impl REPAK {
     // @todo ❌
 }
 
+#[derive(Default)]
 struct IndexHeader {
     version: u8,
-    count: u32,
+    count: u64,
     size: u64,
-    entries: BTreeMap<String, IndexEntry>,
+    entries: BTreeMap<String, IndexEntry>, // not part of IndexHeader really, but we can construct it here and move?
     checksum: ChecksumHeader,
 }
 
 impl Ser for IndexHeader {
     fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
-        w.write_all(&b"REPAK")?;
-        w.write(&self.version)?;
-        let reserved = 0u16;
-        w.write(&reserved)?;
+        w.write_all(b"REPAK")?;
+        w.write_u8(self.version)?;
+        w.write_u16::<LittleEndian>(0u16)?;
         leb128::write::unsigned(w, self.count)?;
         leb128::write::unsigned(w, self.size)?;
         Ok(())
     }
 }
 
+impl Deser for IndexHeader {
+    fn deser(r: &mut impl Read) -> Result<Self, Error> {
+        let mut buf = [0u8; 5];
+        r.read_exact(&mut buf);
+        if &buf != b"REPAK" {
+            return Err(Error::Deser("Not a REPAK archive".to_string()));
+        }
+        let version = r.read_u8()?;
+        if version != 1 {
+            return Err(Error::Deser(format!(
+                "Unsupported REPAK version 0x{:2x}",
+                version
+            )));
+        }
+        let reserved = r.read_u16::<LittleEndian>()?;
+        if reserved != 0 {
+            return Err(Error::Deser("Reserved field is not zero".to_string()));
+        }
+        let count = leb128::read::unsigned(r)?;
+        let size = leb128::read::unsigned(r)?;
+
+        let mut entries = BTreeMap::new();
+        for _ in 0..count {
+            let entry = IndexEntry::deser(r)?;
+            entries.insert(entry.name.clone(), entry);
+        }
+        // @todo checksumming
+
+        Ok(IndexHeader {
+            version,
+            count,
+            size,
+            entries,
+            checksum: ChecksumHeader::default(),
+        })
+    }
+}
+
+#[derive(Default)] // temp?
 struct IndexEntry {
     offset: u64,
     size: u64,
-    flags: u16,
+    flags: u64,
     name: String,
     encryption: Option<EncryptionHeader>,
     compression: Option<CompressionHeader>,
@@ -132,43 +187,48 @@ struct IndexEntry {
 
 impl Ser for IndexEntry {
     fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+        let flags = if self.encryption.is_some() { 0x1 } else { 0 }
+            | if self.compression.is_some() { 0x2 } else { 0 }
+            | if self.checksum.is_some() { 0x4 } else { 0 };
+
         leb128::write::unsigned(w, self.offset)?;
         leb128::write::unsigned(w, self.size)?;
-        leb128::write::unsigned(w, self.flags)?;
-        leb128::write::unsigned(w, self.name.as_bytes().len())?;
+        leb128::write::unsigned(w, flags)?;
+        leb128::write::unsigned(w, self.name.as_bytes().len() as u64)?;
         w.write_all(&self.name.as_bytes());
-        if self.flags & 0x0001 {
-            self.encryption.ser(w)?;
+        if let Some(encryption) = &self.encryption {
+            encryption.ser(w)?
         }
-        if self.flags & 0x0002 {
-            self.compression.ser(w)?;
+        if let Some(compression) = &self.compression {
+            compression.ser(w)?;
         }
-        if self.flags & 0x0004 {
-            self.checksum.ser(w)?;
+        if let Some(checksum) = &self.checksum {
+            checksum.ser(w)?;
         }
         Ok(())
     }
 }
+
 impl Deser for IndexEntry {
-    fn deser(&mut r: impl Read) -> Result<Self, Error> {
+    fn deser(r: &mut impl Read) -> Result<Self, Error> {
         let offset = leb128::read::unsigned(r)?;
         let size = leb128::read::unsigned(r)?;
         let flags = leb128::read::unsigned(r)?;
         let name_len = leb128::read::unsigned(r)?;
-        let mut data = vec![0; name_len];
+        let mut data = vec![0; name_len as usize];
         r.read_exact(&mut data);
         let name = String::from_utf8(data)?;
-        let encryption = if flags & 0x0001 {
+        let encryption = if flags & 0x0001 != 0 {
             Some(EncryptionHeader::deser(r)?)
         } else {
             None
         };
-        let compression = if flags & 0x0002 {
+        let compression = if flags & 0x0002 != 0 {
             Some(CompressionHeader::deser(r)?)
         } else {
             None
         };
-        let checksum = if flags & 0x0004 {
+        let checksum = if flags & 0x0004 != 0 {
             Some(ChecksumHeader::deser(r)?)
         } else {
             None
@@ -187,7 +247,7 @@ impl Deser for IndexEntry {
 }
 
 struct EncryptionHeader {
-    size: u32,
+    size: u64,
     algorithm: EncryptionAlgorithm,
     // TODO: Encryption payload parameters
     payload: Vec<u8>,
@@ -196,14 +256,14 @@ struct EncryptionHeader {
 impl Ser for EncryptionHeader {
     fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
         leb128::write::unsigned(w, self.size)?;
-        leb128::write::unsigned(w, self.algorithm)?;
+        leb128::write::unsigned(w, self.algorithm.into())?;
         w.write_all(&self.payload);
         Ok(())
     }
 }
 
 impl Deser for EncryptionHeader {
-    fn deser(&mut r: impl Read) -> Result<Self, Error> {
+    fn deser(r: &mut impl Read) -> Result<Self, Error> {
         let size = leb128::read::unsigned(r)?;
         let algorithm = EncryptionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
         let payload = match algorithm {
@@ -217,8 +277,17 @@ impl Deser for EncryptionHeader {
     }
 }
 
+#[derive(Clone, Copy)]
 enum EncryptionAlgorithm {
-    NotImplementedYet = 0,
+    NotImplementedYet,
+}
+
+impl From<EncryptionAlgorithm> for u64 {
+    fn from(value: EncryptionAlgorithm) -> u64 {
+        match value {
+            EncryptionAlgorithm::NotImplementedYet => 0,
+        }
+    }
 }
 
 impl TryFrom<u64> for EncryptionAlgorithm {
@@ -236,7 +305,7 @@ impl TryFrom<u64> for EncryptionAlgorithm {
 }
 
 struct CompressionHeader {
-    size: u32,
+    size: u64,
     algorithm: CompressionAlgorithm,
     // TODO: Compression payload parameters
     payload: Vec<u8>,
@@ -245,14 +314,14 @@ struct CompressionHeader {
 impl Ser for CompressionHeader {
     fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
         leb128::write::unsigned(w, self.size)?;
-        leb128::write::unsigned(w, self.algorithm)?;
+        leb128::write::unsigned(w, self.algorithm.into())?;
         w.write_all(&self.payload);
         Ok(())
     }
 }
 
 impl Deser for CompressionHeader {
-    fn deser(&mut r: impl Read) -> Result<Self, Error> {
+    fn deser(r: &mut impl Read) -> Result<Self, Error> {
         let size = leb128::read::unsigned(r)?;
         let algorithm = CompressionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
         let payload = match algorithm {
@@ -272,14 +341,29 @@ impl Deser for CompressionHeader {
     }
 }
 
+#[derive(Clone, Copy)]
 enum CompressionAlgorithm {
-    NoCompression = 0,
-    Deflate = 1,
-    Bzip = 2,
-    Zstd = 3,
-    Lzma = 4,
-    Lz4 = 5,
-    Fsst = 6,
+    NoCompression,
+    Deflate,
+    Bzip,
+    Zstd,
+    Lzma,
+    Lz4,
+    Fsst,
+}
+
+impl From<CompressionAlgorithm> for u64 {
+    fn from(value: CompressionAlgorithm) -> u64 {
+        match value {
+            CompressionAlgorithm::NoCompression => 0,
+            CompressionAlgorithm::Deflate => 1,
+            CompressionAlgorithm::Bzip => 2,
+            CompressionAlgorithm::Zstd => 3,
+            CompressionAlgorithm::Lzma => 4,
+            CompressionAlgorithm::Lz4 => 5,
+            CompressionAlgorithm::Fsst => 6,
+        }
+    }
 }
 
 impl TryFrom<u64> for CompressionAlgorithm {
@@ -302,9 +386,10 @@ impl TryFrom<u64> for CompressionAlgorithm {
     }
 }
 
+#[derive(Default)]
 struct ChecksumHeader {
-    size: u32,
-    count: u16,
+    size: u64,
+    count: u64,
     checksums: Vec<Checksum>,
 }
 
@@ -320,7 +405,7 @@ impl Ser for ChecksumHeader {
 }
 
 impl Deser for ChecksumHeader {
-    fn deser(&mut r: impl Read) -> Result<Self, Error> {
+    fn deser(r: &mut impl Read) -> Result<Self, Error> {
         let size = leb128::read::unsigned(r)?;
         let count = leb128::read::unsigned(r)?;
         let mut checksums = Vec::with_capacity(count as usize);
@@ -349,7 +434,7 @@ impl Ser for Checksum {
 }
 
 impl Deser for Checksum {
-    fn deser(&mut r: impl Read) -> Result<Self, Error> {
+    fn deser(r: &mut impl Read) -> Result<Self, Error> {
         let kind = ChecksumKind::try_from(leb128::read::unsigned(r)?)?;
         let payload = match kind {
             ChecksumKind::SHA3 => vec![],
@@ -364,6 +449,7 @@ impl Deser for Checksum {
     }
 }
 
+#[derive(Clone, Copy)]
 enum ChecksumKind {
     SHA3 = 1,
     K12 = 2,
