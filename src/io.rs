@@ -1,7 +1,12 @@
+use {
+    crate::Error,
+    std::io::{Read, Write},
+};
+
 pub trait Ser {
-    fn ser(&self, w: impl Write) -> Result<(), Error>;
+    fn ser(&self, w: &mut impl Write) -> Result<(), Error>;
 }
 
-pub trait Deser {
+pub trait Deser: Sized {
     fn deser(r: impl Read) -> Result<Self, Error>;
 }

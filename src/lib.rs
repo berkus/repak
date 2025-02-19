@@ -1,10 +1,11 @@
 use {
     crate::io::Deser,
     culpa::throws,
+    io::Ser,
     std::{
         collections::BTreeMap,
         fs,
-        io::Read,
+        io::{Read, Write},
         path::{Path, PathBuf},
     },
 };
@@ -103,6 +104,20 @@ struct IndexHeader {
     version: u8,
     count: u32,
     size: u64,
+    entries: BTreeMap<String, IndexEntry>,
+    checksum: ChecksumHeader,
+}
+
+impl Ser for IndexHeader {
+    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+        w.write_all(&b"REPAK")?;
+        w.write(&self.version)?;
+        let reserved = 0u16;
+        w.write(&reserved)?;
+        leb128::write::unsigned(w, self.count)?;
+        leb128::write::unsigned(w, self.size)?;
+        Ok(())
+    }
 }
 
 struct IndexEntry {
@@ -115,6 +130,25 @@ struct IndexEntry {
     checksum: Option<ChecksumHeader>,
 }
 
+impl Ser for IndexEntry {
+    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+        leb128::write::unsigned(w, self.offset)?;
+        leb128::write::unsigned(w, self.size)?;
+        leb128::write::unsigned(w, self.flags)?;
+        leb128::write::unsigned(w, self.name.as_bytes().len())?;
+        w.write_all(&self.name.as_bytes());
+        if self.flags & 0x0001 {
+            self.encryption.ser(w)?;
+        }
+        if self.flags & 0x0002 {
+            self.compression.ser(w)?;
+        }
+        if self.flags & 0x0004 {
+            self.checksum.ser(w)?;
+        }
+        Ok(())
+    }
+}
 impl Deser for IndexEntry {
     fn deser(&mut r: impl Read) -> Result<Self, Error> {
         let offset = leb128::read::unsigned(r)?;
@@ -124,9 +158,21 @@ impl Deser for IndexEntry {
         let mut data = vec![0; name_len];
         r.read_exact(&mut data);
         let name = String::from_utf8(data)?;
-        let encryption = EncryptionHeader::deser(r)?;
-        let compression = CompressionHeader::deser(r)?;
-        let checksum = ChecksumHeader::deser(r)?;
+        let encryption = if flags & 0x0001 {
+            Some(EncryptionHeader::deser(r)?)
+        } else {
+            None
+        };
+        let compression = if flags & 0x0002 {
+            Some(CompressionHeader::deser(r)?)
+        } else {
+            None
+        };
+        let checksum = if flags & 0x0004 {
+            Some(ChecksumHeader::deser(r)?)
+        } else {
+            None
+        };
 
         Ok(Self {
             offset,
@@ -143,13 +189,31 @@ impl Deser for IndexEntry {
 struct EncryptionHeader {
     size: u32,
     algorithm: EncryptionAlgorithm,
+    // TODO: Encryption payload parameters
+    payload: Vec<u8>,
+}
+
+impl Ser for EncryptionHeader {
+    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+        leb128::write::unsigned(w, self.size)?;
+        leb128::write::unsigned(w, self.algorithm)?;
+        w.write_all(&self.payload);
+        Ok(())
+    }
 }
 
 impl Deser for EncryptionHeader {
     fn deser(&mut r: impl Read) -> Result<Self, Error> {
         let size = leb128::read::unsigned(r)?;
         let algorithm = EncryptionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
-        Ok(Self { size, algorithm })
+        let payload = match algorithm {
+            EncryptionAlgorithm::NotImplementedYet => vec![],
+        };
+        Ok(Self {
+            size,
+            algorithm,
+            payload,
+        })
     }
 }
 
@@ -174,13 +238,37 @@ impl TryFrom<u64> for EncryptionAlgorithm {
 struct CompressionHeader {
     size: u32,
     algorithm: CompressionAlgorithm,
+    // TODO: Compression payload parameters
+    payload: Vec<u8>,
+}
+
+impl Ser for CompressionHeader {
+    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+        leb128::write::unsigned(w, self.size)?;
+        leb128::write::unsigned(w, self.algorithm)?;
+        w.write_all(&self.payload);
+        Ok(())
+    }
 }
 
 impl Deser for CompressionHeader {
     fn deser(&mut r: impl Read) -> Result<Self, Error> {
         let size = leb128::read::unsigned(r)?;
         let algorithm = CompressionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
-        Ok(Self { size, algorithm })
+        let payload = match algorithm {
+            CompressionAlgorithm::NoCompression => vec![],
+            CompressionAlgorithm::Deflate => vec![],
+            CompressionAlgorithm::Bzip => vec![],
+            CompressionAlgorithm::Zstd => vec![],
+            CompressionAlgorithm::Lzma => vec![],
+            CompressionAlgorithm::Lz4 => vec![],
+            CompressionAlgorithm::Fsst => vec![],
+        };
+        Ok(Self {
+            size,
+            algorithm,
+            payload,
+        })
     }
 }
 
@@ -220,6 +308,17 @@ struct ChecksumHeader {
     checksums: Vec<Checksum>,
 }
 
+impl Ser for ChecksumHeader {
+    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+        leb128::write::unsigned(w, self.size)?;
+        leb128::write::unsigned(w, self.count)?;
+        for c in &self.checksums {
+            c.ser(w)?;
+        }
+        Ok(())
+    }
+}
+
 impl Deser for ChecksumHeader {
     fn deser(&mut r: impl Read) -> Result<Self, Error> {
         let size = leb128::read::unsigned(r)?;
@@ -238,14 +337,30 @@ impl Deser for ChecksumHeader {
 
 struct Checksum {
     kind: ChecksumKind,
-    value: u64, // @todo
+    payload: Vec<u8>, // @todo
+}
+
+impl Ser for Checksum {
+    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+        leb128::write::unsigned(w, self.kind as u64)?;
+        w.write_all(&self.payload)?;
+        Ok(())
+    }
 }
 
 impl Deser for Checksum {
     fn deser(&mut r: impl Read) -> Result<Self, Error> {
-        let kind = leb128::read::unsigned(r)?;
-        let value = leb128::read::unsigned(r)?;
-        Ok(Self { kind, value })
+        let kind = ChecksumKind::try_from(leb128::read::unsigned(r)?)?;
+        let payload = match kind {
+            ChecksumKind::SHA3 => vec![],
+            ChecksumKind::K12 => vec![],
+            ChecksumKind::BLAKE3 => vec![],
+            ChecksumKind::Xxhash3 => vec![],
+            ChecksumKind::Metrohash => vec![],
+            ChecksumKind::SeaHash => vec![],
+            ChecksumKind::CityHash => vec![],
+        };
+        Ok(Self { kind, payload })
     }
 }
 
