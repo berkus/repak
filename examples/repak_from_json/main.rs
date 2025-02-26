@@ -78,7 +78,7 @@ impl From<Checksum> for repak::ChecksumKind {
 #[derive(Deserialize)]
 struct Asset {
     path: PathBuf,
-    name: String,
+    name: Option<String>,
     compression: Option<Compression>,
     encryption: Option<Encryption>,
     checksums: Option<Vec<Checksum>>,
@@ -116,12 +116,16 @@ fn main() {
     };
 
     for asset in m.assets {
+        let name = asset
+            .name
+            .unwrap_or_else(|| format!("{}", asset.path.display()));
+
         let entry = repak
-            .lookup(asset.name.clone())
+            .lookup(name.clone())
             .context("Looking up REPAK resource")?;
         if entry.is_none() {
             repak
-                .append(asset.name, &asset.path, AppendOptions::default())
+                .append(name, &asset.path, AppendOptions::default())
                 .context("Adding REPAK resource")?;
             // @todo options
         }

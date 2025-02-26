@@ -6,6 +6,9 @@
   },
   "assets": [
     {
+      "path": "./assets/manifest.json"
+    },
+    {
       "path": "./assets/README.md",
       "name": "readme",
       "checksums": ["seahash", "k12-256"]
