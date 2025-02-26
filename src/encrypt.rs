@@ -1,21 +1,23 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser},
+        io::{Deser, Ser, leb128_usize},
     },
     std::io::{Read, Write},
 };
 
+#[derive(Debug)] // temp?
 pub(crate) struct EncryptionHeader {
-    size: u64,
     algorithm: EncryptionAlgorithm,
+    size: u64,
     // TODO: Encryption payload parameters
     payload: Vec<u8>,
 }
 
 impl Ser for EncryptionHeader {
     fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
-        leb128::write::unsigned(w, self.size)?;
+        let size = leb128_usize(self.algorithm.into())? + self.payload.len();
+        leb128::write::unsigned(w, size as u64)?;
         leb128::write::unsigned(w, self.algorithm.into())?;
         w.write_all(&self.payload)?;
         Ok(())
@@ -37,7 +39,7 @@ impl Deser for EncryptionHeader {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum EncryptionAlgorithm {
     NotImplementedYet,
 }

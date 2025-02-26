@@ -6,7 +6,7 @@ use {
     std::io::{Read, Write},
 };
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct ChecksumHeader {
     size: u64,
     count: u64,
@@ -40,6 +40,7 @@ impl Deser for ChecksumHeader {
     }
 }
 
+#[derive(Debug)]
 struct Checksum {
     kind: ChecksumKind,
     payload: Vec<u8>, // @todo
@@ -69,15 +70,15 @@ impl Deser for Checksum {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum ChecksumKind {
-    SHA3 = 1,
-    K12 = 2,
-    BLAKE3 = 3,
-    Xxhash3 = 4,
-    MetroHash = 5,
-    SeaHash = 6,
-    CityHash = 7,
+    SHA3,
+    K12,
+    BLAKE3,
+    Xxhash3,
+    MetroHash,
+    SeaHash,
+    CityHash,
 }
 
 impl TryFrom<u64> for ChecksumKind {

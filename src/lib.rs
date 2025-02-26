@@ -1,3 +1,7 @@
+#![feature(default_field_values)]
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 use {
     crate::{checksum::*, compress::*, encrypt::*, io::Deser},
     byteorder::*,
@@ -50,8 +54,9 @@ pub struct REPAK {
 /// Reference to a single resource in the archive.
 ///
 /// Allows you to validate, decrypt, decompress, extract data.
-pub struct Entry {
-    inner: IndexEntry,
+pub struct Entry<'a> {
+    inner: &'a IndexEntry,
+    source: Source,
 }
 
 /// Create a new repak archive.
@@ -100,13 +105,29 @@ pub fn open(input: &Path) -> REPAK {
     }
 }
 
+// Source of the asset data
+enum Source {
+    File(PathBuf),
+    Memory(Vec<u8>),
+}
+
+#[derive(Default, Debug)]
+pub struct AppendOptions {
+    pub checksum: Option<ChecksumKind> = None,
+    pub compression: Option<CompressionAlgorithm> = None,
+    pub encryption: Option<EncryptionAlgorithm> = None,
+}
+
 impl REPAK {
     /// Lookup a file in the archive.
     ///
     /// Returns a reference to the file entry.
     #[throws]
-    pub fn lookup(&self, id: String) -> Option<Entry> {
-        self.index.entries.get(&id).map(|inner| Entry { inner })
+    pub fn lookup<'a>(&'a self, id: String) -> Option<Entry<'a>> {
+        self.index.entries.get(&id).map(|inner| Entry {
+            inner,
+            source: Source::Memory(vec![]),
+        })
     }
 
     /// Append a file to the archive.
@@ -115,7 +136,7 @@ impl REPAK {
     /// It is posible to request checksumming, compression, and encryption
     /// (in this order).
     #[throws]
-    pub fn append(&mut self, id: String, file: &Path) {
+    pub fn append(&mut self, id: String, file: &Path, _options: AppendOptions) {
         if self.index.entries.contains_key(&id) {
             throw!(Error::AlreadyExists(id));
         }
@@ -123,9 +144,9 @@ impl REPAK {
             offset: self.last_insertion_offset,
             size: file.metadata()?.len(),
             name: id.clone(),
-            encryption: None,
-            compression: None,
-            checksum: None,
+            encryption: None,  //options.encryption,
+            compression: None, //options.compression,
+            checksum: None,    //options.checksum,
         };
         // @todo copy file data to archive
         self.last_insertion_offset += entry.size;
@@ -134,9 +155,24 @@ impl REPAK {
 
     /// Save the archive.
     #[throws]
-    pub fn save(&self) {}
+    pub fn save(&self) {
+        // this func needs to save the payloads from source files, if any
+        // and then save the index
+        self.save_index()?;
+    }
 
-    // save_index()?
+    /// Index is ordered by Name, so it makes easier to look up via binary search even
+    /// if you do not apply any sorted containers and just read all entries into a Vec.
+    #[throws]
+    fn save_index(&self) {
+        let idxfile = self.file_path.with_extension("idpak");
+        let mut idxfile = File::create_new(idxfile)?;
+
+        for x in self.index.entries.values() {
+            println!("Entry: {:?}", x);
+            x.ser(&mut idxfile)?;
+        }
+    }
 
     // Advanced api: extract payload, skip decryption, decompression, checksum verification.
     // @todo ❌
@@ -145,7 +181,6 @@ impl REPAK {
 #[derive(Default)]
 struct IndexHeader {
     count: u64,
-    size: u64,
     entries: BTreeMap<String, IndexEntry>, // not part of IndexHeader really, but we can construct it here and move?
     checksum: ChecksumHeader,
 }
@@ -156,7 +191,6 @@ impl Ser for IndexHeader {
         w.write_u8(0x1)?; // Version 1
         w.write_u16::<LittleEndian>(0u16)?;
         leb128::write::unsigned(w, self.count)?;
-        leb128::write::unsigned(w, self.size)?;
         Ok(())
     }
 }
@@ -188,9 +222,9 @@ impl Deser for IndexHeader {
             return Err(Error::Deser("Reserved field is not zero".to_string()));
         }
         let count = leb128::read::unsigned(r)?;
-        let size = leb128::read::unsigned(r)?;
 
         let mut entries = BTreeMap::new();
+        //entries.extend_reserve(count);
         for _ in 0..count {
             let entry = IndexEntry::deser(r)?;
             entries.insert(entry.name.clone(), entry);
@@ -199,14 +233,13 @@ impl Deser for IndexHeader {
 
         Ok(IndexHeader {
             count,
-            size,
             entries,
             checksum: ChecksumHeader::default(),
         })
     }
 }
 
-#[derive(Default)] // temp?
+#[derive(Default, Debug)] // temp?
 struct IndexEntry {
     offset: u64,
     size: u64,
