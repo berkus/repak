@@ -1,6 +1,11 @@
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 use {
+    anyhow::{Context, Result},
     argh::FromArgs,
     culpa::throws,
+    repak::AppendOptions,
     serde::Deserialize,
     std::{fs::File, path::PathBuf},
 };
@@ -25,6 +30,8 @@ struct GlobalOptions {
 enum Compression {
     #[serde(rename = "best")]
     Best,
+    #[serde(rename = "zstd")]
+    Zstd,
     #[serde(rename = "none")]
     None,
 }
@@ -98,14 +105,24 @@ struct Args {
 #[throws(anyhow::Error)]
 fn main() {
     let args: Args = argh::from_env();
-    let m: Manifest = serde_json::from_reader(File::open(args.manifest_file)?)?;
+    let m: Manifest =
+        serde_json::from_reader(File::open(args.manifest_file).context("Open JSON manifest file")?)
+            .context("Parsing JSON manifest")?;
 
-    let mut repak = repak::open(&args.repak_file)?;
+    let mut repak = if std::fs::exists(&args.repak_file)? {
+        repak::open(&args.repak_file).context("Opening REPAK file")?
+    } else {
+        repak::create(&args.repak_file).context("Creating REPAK file")?
+    };
 
     for asset in m.assets {
-        let entry = repak.lookup(asset.name.clone())?;
+        let entry = repak
+            .lookup(asset.name.clone())
+            .context("Looking up REPAK resource")?;
         if entry.is_none() {
-            repak.append(asset.name, &asset.path)?;
+            repak
+                .append(asset.name, &asset.path, AppendOptions::default())
+                .context("Adding REPAK resource")?;
             // @todo options
         }
     }

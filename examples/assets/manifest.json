@@ -6,22 +6,22 @@
   },
   "assets": [
     {
-      "path": "../assets/README.md",
+      "path": "./assets/README.md",
       "name": "readme",
       "checksums": ["seahash", "k12-256"]
     },
     {
-      "path": "../assets/lenna.png",
+      "path": "./assets/lenna.png",
       "name": "test image"
     },
     {
-      "path": "../assets/teapot.fbx",
+      "path": "./assets/teapot.fbx",
       "name": "teapot",
       "compression": "zstd",
       "checksums": ["sha3", "seahash", "blake3-256"]
     },
     {
-      "path": "../assets/waves.mp4",
+      "path": "./assets/waves.mp4",
       "name": "video",
       "compression": "none"
     }
