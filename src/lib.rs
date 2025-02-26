@@ -166,7 +166,7 @@ impl REPAK {
     #[throws]
     fn save_index(&self) {
         let idxfile = self.file_path.with_extension("idpak");
-        let mut idxfile = File::create_new(idxfile)?;
+        let mut idxfile = File::create(idxfile)?;
 
         for x in self.index.entries.values() {
             println!("Entry: {:?}", x);
