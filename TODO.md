@@ -1,0 +1,10 @@
+- [ ] read index
+- [ ] read compressed index
+- [ ] write index
+- [ ] write compressed index
+- [ ] copy assets to data file
+- [ ] attach index to data file with locator
+- [ ] detach index from data file into index file
+- [ ] try all compressions on data file before writing
+- [ ] apply encryption (at least simplest AES-NI)
+- [ ] apply decryption
