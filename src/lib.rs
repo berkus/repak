@@ -9,8 +9,9 @@ use {
     io::Ser,
     std::{
         collections::BTreeMap,
+        convert::Infallible,
         fs::{self, File},
-        io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
+        io::{BufReader, Cursor, Read, Seek, SeekFrom, Write, copy},
         path::{Path, PathBuf},
     },
 };
@@ -147,6 +148,7 @@ impl REPAK {
             encryption: None,  //options.encryption,
             compression: None, //options.compression,
             checksum: None,    //options.checksum,
+            path: file.to_owned(),
         };
         // @todo copy file data to archive
         self.last_insertion_offset += entry.size;
@@ -156,7 +158,22 @@ impl REPAK {
     /// Save the archive.
     #[throws]
     pub fn save(&self) {
-        // this func needs to save the payloads from source files, if any
+        let mut pakfile = File::create(self.file_path.clone())?;
+
+        // sort index by offset
+        let mut sorted = self.index.entries.values().collect::<Vec<_>>();
+        sorted.sort_by(|a, b| a.offset.cmp(&b.offset));
+
+        // @todo: skip everything that is "already" in the archive
+
+        // write the rest
+        for entry in sorted {
+            println!("Sorted Entry: {:?}", entry);
+            let mut infile = File::open(entry.path.clone())?;
+            pakfile.seek(SeekFrom::Start(entry.offset))?;
+            copy(&mut infile, &mut pakfile)?;
+        }
+
         // and then save the index
         self.save_index()?;
     }
@@ -247,6 +264,8 @@ struct IndexEntry {
     encryption: Option<EncryptionHeader>,
     compression: Option<CompressionHeader>,
     checksum: Option<ChecksumHeader>,
+
+    path: PathBuf,
 }
 
 impl Ser for IndexEntry {
@@ -305,6 +324,7 @@ impl Deser for IndexEntry {
             encryption,
             compression,
             checksum,
+            path: PathBuf::new(),
         })
     }
 }
