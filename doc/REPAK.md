@@ -10,15 +10,14 @@ Asset library format similar in idea to Quake PAK or DOOM WAD files. The file is
 
 # REPAK index
 
-| Offset | Size   | Content         | Description                                                                                                                                                                                                        |
-| ------ | ------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 0      | 5      | "REPAK"         | Format marker                                                                                                                                                                                                      |
-| 5      | 1      | 0x01            | Version                                                                                                                                                                                                            |
-| 6      | 2      | 0x0000          | Reserved                                                                                                                                                                                                           |
-| 8      | uleb64 | count           | Number of following index entries                                                                                                                                                                                  |
-| ?      | uleb64 | size            | Size of the entire `entries[count]` array in bytes. To make it easier to allocate and read the entire variable-sized array in one go for parsing.                                                                  |
-| ?      |        | entries\[count] | Variable-sized entries array                                                                                                                                                                                       |
-| ?      |        | ChecksumHeader  | Checksum structure for the Index, see below for format. The checksum is calculated after the `size` field is calculated and written. The entire contents of the header starting from REPAK marker are checksummed. |
+| Offset | Size   | Content         | Description                                                                                                                                                                              |
+| ------ | ------ | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0      | 5      | "REPAK"         | Format marker                                                                                                                                                                            |
+| 5      | 1      | 0x01            | Version                                                                                                                                                                                  |
+| 6      | 2      | 0x0000          | Reserved                                                                                                                                                                                 |
+| 8      | uleb64 | count           | Number of following index entries                                                                                                                                                        |
+| ?      |        | entries\[count] | Variable-sized entries array                                                                                                                                                             |
+| ?      |        | ChecksumHeader  | Checksum structure for the Index, see below for format. The entire contents of the header starting from REPAK marker and up until but not including the Checksum footer are checksummed. |
 
 Immediately following the last index entry is the index offset field at the file end.
 
@@ -33,28 +32,28 @@ If an `.idpak` file is present, it is given preference - as detecting the presen
 
 Entries are variable sized,
 
-| Offset | Size            | Content           | Description                                                                                                                                                                                  |
-| ------ | --------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0      | uleb64          | Offset            | Location of the asset in file                                                                                                                                                                |
-| ?      | uleb64          | Size              | Size of the asset in file                                                                                                                                                                    |
-| ?      | uleb64          | Flags             | Flags indicate presence of encryption, compression and checksums and affect which of the following header fields are present.                                                                |
-|        | flags & 0x0001  | Encryption bit    | Encryption header is present and defines used encryption method.                                                                                                                             |
-|        | flags & 0x0002  | Compression bit   | Compression header is present and defines used compression for the data blob. The blobs do not have any additional fields, they are just payload.                                            |
-|        | flags & 0x0004  | Checksum bit      | Checksumming header is present and lists used checksumming methods and calculated payload checksums.                                                                                         |
-|        | All other flags | Reserved          | Must not be used.                                                                                                                                                                            |
-| ?      | uleb64          | Name length       | Length of the following name, there are no \0 terminators.                                                                                                                                   |
-| ?      | Name length     | Name              | UTF-8 name of the asset. There are no limits on how asset names are structured as long as they are valid UTF-8 strings. One can use plain names, paths, dot delimited names, whatever works. |
-| ?      | ?               | EncryptionHeader  | Optional, if Encryption bit is set in Flags                                                                                                                                                  |
-| ?      | ?               | CompressionHeader | Optional, if Compression bit is set in Flags                                                                                                                                                 |
-| ?      | ?               | ChecksumHeader    | Optional, if Checksum bit is set in Flags                                                                                                                                                    |
+| Offset | Size            | Content           | Description                                                                                                                                                                                                |
+| ------ | --------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0      | uleb64          | Offset            | Location of the asset in file                                                                                                                                                                              |
+| ?      | uleb64          | Size              | Size of the asset in file                                                                                                                                                                                  |
+| ?      | uleb64          | Flags             | Flags indicate presence of encryption, compression and checksums and affect which of the following header fields are present.                                                                              |
+|        | flags & 0x0001  | Encryption bit    | Encryption header is present and defines used encryption method.                                                                                                                                           |
+|        | flags & 0x0002  | Compression bit   | Compression header is present and defines used compression for the data blob. The blobs do not have any additional fields, they are just payload.                                                          |
+|        | flags & 0x0004  | Checksum bit      | Checksumming header is present and lists used checksumming methods and calculated payload checksums.                                                                                                       |
+|        | All other flags | Reserved          | Must not be used.                                                                                                                                                                                          |
+| ?      | uleb64          | Name length       | Length of the following name, there are no \0 terminators.                                                                                                                                                 |
+| ?      | Name length     | Name              | UTF-8 name of the asset.<br><br>There are no limits on how asset names are structured as long as they are valid UTF-8 strings.<br><br>One can use plain names, paths, dot delimited names, whatever works. |
+| ?      | ?               | EncryptionHeader  | Optional, if Encryption bit is set in Flags                                                                                                                                                                |
+| ?      | ?               | CompressionHeader | Optional, if Compression bit is set in Flags                                                                                                                                                               |
+| ?      | ?               | ChecksumHeader    | Optional, if Checksum bit is set in Flags                                                                                                                                                                  |
 
 ## Encryption
 
-| Offset | Size   | Content    | Description                                  |
-| ------ | ------ | ---------- | -------------------------------------------- |
-| 0      | uleb64 | Size       | Size of entire encryption header             |
-| ?      | uleb64 | Algorithm  | Encryption algorithm used, see below         |
-| ?      | ?      | Parameters | Algorithm-specific parameters, such as salt. |
+| Offset | Size   | Content      | Description                                  |
+| ------ | ------ | ------------ | -------------------------------------------- |
+| 0      | uleb64 | Algorithm ID | Encryption algorithm used, see below         |
+| ?      | uleb64 | Size         | Size of Parameters                           |
+| ?      | ?      | Parameters   | Algorithm-specific parameters, such as salt. |
 
 Encryption algorithms are classified into standard and custom.
 
@@ -71,11 +70,11 @@ The standard REPAK implementation will return an error when attempting to decryp
 
 ## Compression
 
-| Offset | Size   | Content    | Description                                                        |
-| ------ | ------ | ---------- | ------------------------------------------------------------------ |
-| 0      | uleb64 | Size       | Size of entire compression header                                  |
-| ?      | uleb64 | Algorithm  | Compression algorithm used, see below                              |
-| 6      | ?      | Parameters | Algorithm-specific parameters, for example decompressed blob size. |
+| Offset | Size   | Content      | Description                                                        |
+| ------ | ------ | ------------ | ------------------------------------------------------------------ |
+| 0      | uleb64 | Algorithm ID | Compression algorithm used, see below                              |
+| ?      | uleb64 | Size         | Size of Parameters                                                 |
+| 6      | ?      | Parameters   | Algorithm-specific parameters, for example decompressed blob size. |
 
 Compression algorithms are classified into standard and custom.
 
@@ -86,18 +85,15 @@ Compression algorithms are classified into standard and custom.
 
 The standard REPAK implementation will return an error when attempting to decompress custom content. You can still extract the compressed blob though.
 
-| Algorithm ID | Algorithm      | Parameters size and format                                |
-| ------------ | -------------- | --------------------------------------------------------- |
-| 0x0000       | No compression | 0 bytes                                                   |
-| 0x0001       | deflate        | RFC 1951, Generic decompression parameters                |
-| 0x0002       | gzip           | Generic decompression parameters                          |
-| 0x0003       | bzip2          | Generic decompression parameters                          |
-| 0x0004       | zstd           | Generic decompression parameters                          |
-| 0x0005       | lzma (xz)      | Generic decompression parameters                          |
-| 0x0006       | LZ4            | Generic decompression parameters                          |
-| 0x0007       | fsst           | Fast String Compression, Generic decompression parameters |
-
-There is usually no need to specify algorithm 0x0000 as it is exactly equivalent to just having an uncompressed blob.
+| Algorithm ID | Algorithm | Parameters size and format                                |
+| ------------ | --------- | --------------------------------------------------------- |
+| 0x0000       | reserved  | Do not use.                                               |
+| 0x0001       | deflate   | RFC 1951, gzip-like, Generic decompression parameters     |
+| 0x0002       | bzip2     | Generic decompression parameters                          |
+| 0x0003       | zstd      | Generic decompression parameters                          |
+| 0x0004       | lzma (xz) | Generic decompression parameters                          |
+| 0x0005       | LZ4       | Generic decompression parameters                          |
+| 0x0006       | fsst      | Fast String Compression, Generic decompression parameters |
 
 ### Generic decompression parameters
 
@@ -105,18 +101,24 @@ There is usually no need to specify algorithm 0x0000 as it is exactly equivalent
 | ------ | ------ | ----------------- | --------------------------------- |
 | 0      | uleb64 | Decompressed Size | Size of the decompressed payload. |
 
-This helps pre-allocate and/or validate decompression.
+This helps pre-allocate buffers and validate decompression.
 
 ## Checksum
 
-Checksum header provides support for having one or more checksums over the original uncompressed unencrypted payload. The same header is used to checksum the Index.
+Checksum header provides support for having one or more checksums over the original uncompressed unencrypted payload. The same header structure is used to checksum the Index.
 
-| Offset | Size           | Content           | Description                                                                                       |
-| ------ | -------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
-| 0      | uleb64         | Size              | Size of the entire checksum header                                                                |
-| ?      | uleb64         | Count             | Count of checksum payloads included                                                               |
-| ?      | uleb64 * count | types\[count]     | Array of checksum types, one after another.                                                       |
-| ?      | ?              | checksums\[count] | Array of checksum payloads, in the same order as types, type determines the size of each payload. |
+| Offset | Size   | Content           | Description                                                    |
+| ------ | ------ | ----------------- | -------------------------------------------------------------- |
+| 0      | uleb64 | Count             | Count of checksum payloads included, 1 or more, no duplicates. |
+| ?      | ?      | checksums\[count] | Array of checksums, one after another.                         |
+
+Each checksum:
+
+| Offset | Size   | Content      | Description                               |
+| ------ | ------ | ------------ | ----------------------------------------- |
+| 0      | uleb64 | Algorithm ID | Checksum algorithm used, see below        |
+| ?      | uleb64 | Payload size | Size of the checksum payload              |
+| ?      | ?      | Payload      | Calculated checksum in appropriate format |
 
 Checksum algorithms are classified into standard and custom.
 
@@ -129,7 +131,7 @@ The standard REPAK implementation will return an error when attempting to read c
 
 ### Checksum payloads
 
-Keep in mind that the purpose of these checksums is to validate integrity of the payload, i.e. that the decrypted and decompressed bytes are matching the original payload that was added. It is not a cryptographic hash. If one is needed - it should be added to the Encryption header with some MAC (a non-encrypting HMAC verification shall be possible via Encryption header also).
+Keep in mind that the purpose of these checksums is to validate integrity of the payload, i.e. that the decrypted and decompressed bytes are matching the original payload that was added. It is not a cryptographic hash. If one is needed - it should be added to the Encryption header with some MAC (a non-encrypting HMAC verification shall be possible via Encryption header also - #todo).
 
 | Type ID | Checksum      | Payload format and size                         |
 | ------- | ------------- | ----------------------------------------------- |
@@ -144,11 +146,11 @@ Keep in mind that the purpose of these checksums is to validate integrity of the
 
 K12_256_Payload:
 
-| Offset | Size   | Content          | Description                                      |
-| ------ | ------ | ---------------- | ------------------------------------------------ |
-| 0      | uleb64 | size_seed_string | Size of the following string seed                |
-| ?      | ?      | seed_string      | The seed used for starting K12 as a UTF-8 string |
-| ?      | 32     | hash_output      | The 256 bit binary hash output                   |
+| Offset | Size   | Content          | Description                                                                                                                                                   |
+| ------ | ------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0      | uleb64 | size_seed_string | Size of the following string seed                                                                                                                             |
+| ?      | ?      | seed_string      | The seed used for starting K12 as a UTF-8 string.<br><br>This string is not reconstructed to unicode and is used as a byte array to initialize k12 algorithm. |
+| ?      | 32     | hash_output      | The 256 bit binary hash output                                                                                                                                |
 
 # Payloads
 
@@ -173,4 +175,6 @@ The maximum size of the 64 bit quantity in VLQ format is (64+6)/7 = 10 bytes. Ho
                        ^ last byte in file
 ```
 
-The easiest way to parse it as an ULEB format is to read the last 10 bytes of the file, reverse them and parse as a normal LEB64 number ignoring any extra values after number is completely parsed (keep in mind that maximum representable format is u64 in this case).
+The easiest way to parse it as an ULEB format is to read the last 10 bytes of the file, reverse them and parse as a normal LEB64 number ignoring any extra values after the number has been completely parsed (keep in mind that maximum representable format is u64 in this case).
+
+This much offset from the end will specify where the REPAK index header begins.
