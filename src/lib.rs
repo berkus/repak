@@ -6,11 +6,11 @@ use {
     crate::{checksum::*, compress::*, encrypt::*, io::Deser},
     byteorder::*,
     culpa::{throw, throws},
-    io::Ser,
+    io::{Ser, leb128_usize},
     std::{
         collections::BTreeMap,
         convert::Infallible,
-        fs::{self, File},
+        fs::{self, File, OpenOptions},
         io::{BufReader, Cursor, Read, Seek, SeekFrom, Write, copy},
         path::{Path, PathBuf},
     },
@@ -150,7 +150,6 @@ impl REPAK {
             checksum: None,    //options.checksum,
             path: file.to_owned(),
         };
-        // @todo copy file data to archive
         self.last_insertion_offset += entry.size;
         self.index.entries.insert(id, entry);
     }
@@ -182,17 +181,87 @@ impl REPAK {
     /// if you do not apply any sorted containers and just read all entries into a Vec.
     #[throws]
     fn save_index(&self) {
-        let idxfile = self.file_path.with_extension("idpak");
-        let mut idxfile = File::create(idxfile)?;
+        let idxpath = self.file_path.with_extension("idpak");
+        let mut idxfile = File::create(idxpath.clone())?;
 
         for x in self.index.entries.values() {
             println!("Entry: {:?}", x);
             x.ser(&mut idxfile)?;
         }
+
+        drop(idxfile);
+        let offset = fs::metadata(idxpath.clone())?.len();
+
+        let mut idxfile = File::open(idxpath.clone())?;
+        let mut pakfile = OpenOptions::new()
+            .write(true)
+            .open(self.file_path.clone())?;
+        pakfile.seek(SeekFrom::End(0))?;
+        copy(&mut idxfile, &mut pakfile)?;
+
+        let buf = make_index_locator(offset)?;
+
+        pakfile.write(&buf)?;
     }
 
     // Advanced api: extract payload, skip decryption, decompression, checksum verification.
     // @todo ❌
+}
+
+fn make_index_locator(offset: u64) -> Result<Vec<u8>, std::io::Error> {
+    let lenbuf = leb128_usize(offset + offset / 128 + 1)? as u64;
+    let mut buf = vec![];
+    leb128::write::unsigned(&mut buf, offset + lenbuf).unwrap();
+    buf.reverse();
+    Ok(buf)
+}
+
+#[cfg(test)]
+mod index_locator_tests {
+    use {super::make_index_locator, std::io::Cursor};
+
+    fn prep(offset: u64) -> (Vec<u8>, u64) {
+        let mut buf = make_index_locator(offset).expect("Shouldn't fail");
+        buf.reverse();
+        let check = leb128::read::unsigned(&mut Cursor::new(&buf)).unwrap();
+        buf.reverse();
+        (buf, check)
+    }
+
+    // 127 - 1b
+    // 127+1 - 2b
+    // 127+2 - 2b
+    // So the end offset is 129 (127 index size + 2 locator size)
+    #[test]
+    fn locator_edgecase_1() {
+        let (buf, check) = prep(127);
+        assert_eq!(buf, vec![0x01, 0x81]);
+        assert_eq!(check, 129);
+    }
+
+    // 2-octet VLQ (0xFF7F) is 0b_11_1111_1111_1111 = 0x3FFF = 16383
+    // 16383 - 2b
+    // 16383+2 - 3b
+    // 16383+3 - 3b
+    // So the end offset is 16386 (16383 index size + 3 locator size)
+    #[test]
+    fn locator_edgecase_2() {
+        let (buf, check) = prep(16383);
+        assert_eq!(buf, vec![0x01, 0x80, 0x82]);
+        assert_eq!(check, 16386);
+    }
+
+    // 3-octet VLQ (0xFF_FF_7F) is 0b_1_1111_1111_1111_1111_1111 = 0x1FFFFF = 2097151
+    // 2097151 - 3b
+    // 2097151+3 - 4b
+    // 2097151+4 - 4b
+    // So the end offset is 2097155 (2097151 index size + 4 locator size)
+    #[test]
+    fn locator_edgecase_3() {
+        let (buf, check) = prep(2097151);
+        assert_eq!(buf, vec![0x01, 0x80, 0x80, 0x83]);
+        assert_eq!(check, 2097155);
+    }
 }
 
 #[derive(Default)]
