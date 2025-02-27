@@ -173,6 +173,8 @@ impl REPAK {
             copy(&mut infile, &mut pakfile)?;
         }
 
+        drop(pakfile);
+
         // and then save the index
         self.save_index()?;
     }
@@ -183,6 +185,9 @@ impl REPAK {
     fn save_index(&self) {
         let idxpath = self.file_path.with_extension("idpak");
         let mut idxfile = File::create(idxpath.clone())?;
+
+        let header = IndexHeader::for_writing(self.index.entries.len() as u64);
+        header.ser(&mut idxfile)?;
 
         for x in self.index.entries.values() {
             println!("Entry: {:?}", x);
@@ -269,6 +274,15 @@ struct IndexHeader {
     count: u64,
     entries: BTreeMap<String, IndexEntry>, // not part of IndexHeader really, but we can construct it here and move?
     checksum: ChecksumHeader,
+}
+
+impl IndexHeader {
+    pub fn for_writing(count: u64) -> Self {
+        Self {
+            count,
+            ..Default::default()
+        }
+    }
 }
 
 impl Ser for IndexHeader {
