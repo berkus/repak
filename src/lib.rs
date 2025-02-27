@@ -217,20 +217,20 @@ impl REPAK {
     // @todo ❌
 }
 
-fn make_index_locator(offset: u64) -> Result<Vec<u8>, std::io::Error> {
+#[throws(std::io::Error)]
+fn make_index_locator(offset: u64) -> Vec<u8> {
     let n = 64 - offset.leading_zeros() as u64;
-    // println!("Non-zero bits {}", n);
+    // dbg!("Non-zero bits {}", n);
     // let align_down = fn(x: u64) -> u64 { x & !0x7f };
-    let bsize = (n & !0x7) / 7;
+    let bsize = (n & !7) / 7;
     let off = offset + bsize + 1;
-    // println!("Offset {} + {} + {} = {off} ({off:x})", offset, bsize, 1,);
-
+    // dbg!("Offset {} + {} + {} = {off} ({off:x})", offset, bsize, 1,);
     let lenbuf = leb128_usize(off)? as u64;
-    // println!("Lenbuf {}", lenbuf);
+    // dbg!("Lenbuf {}", lenbuf);
     let mut buf = vec![];
     leb128::write::unsigned(&mut buf, offset + lenbuf).unwrap();
     buf.reverse();
-    Ok(buf)
+    buf
 }
 
 #[cfg(test)]
@@ -334,17 +334,18 @@ impl IndexHeader {
 }
 
 impl Ser for IndexHeader {
-    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+    #[throws(Error)]
+    fn ser(&self, w: &mut impl Write) {
         w.write_all(b"REPAK")?;
         w.write_u8(0x1)?; // Version 1
         w.write_u16::<LittleEndian>(0u16)?;
         leb128::write::unsigned(w, self.count)?;
-        Ok(())
     }
 }
 
 impl Deser for IndexHeader {
-    fn deser(r: &mut impl Read) -> Result<Self, Error> {
+    #[throws(Error)]
+    fn deser(r: &mut impl Read) -> Self {
         let mut buf = [0u8; 5];
         r.read_exact(&mut buf)?;
         // if first four bytes are "0x28, 0xB5, 0x2F, 0xFD" then it's `zstd` compressed
@@ -356,18 +357,18 @@ impl Deser for IndexHeader {
         // return IndexHeader::deser(r); // call itself to parse decompressed data
         // }
         if &buf != b"REPAK" {
-            return Err(Error::Deser("Not a REPAK archive".to_string()));
+            throw!(Error::Deser("Not a REPAK archive".to_string()));
         }
         let version = r.read_u8()?;
         if version != 1 {
-            return Err(Error::Deser(format!(
+            throw!(Error::Deser(format!(
                 "Unsupported REPAK version 0x{:2x}",
                 version
             )));
         }
         let reserved = r.read_u16::<LittleEndian>()?;
         if reserved != 0 {
-            return Err(Error::Deser("Reserved field is not zero".to_string()));
+            throw!(Error::Deser("Reserved field is not zero".to_string()));
         }
         let count = leb128::read::unsigned(r)?;
 
@@ -379,11 +380,11 @@ impl Deser for IndexHeader {
         }
         // @todo checksumming
 
-        Ok(IndexHeader {
+        IndexHeader {
             count,
             entries,
             checksum: ChecksumHeader::default(),
-        })
+        }
     }
 }
 
@@ -400,7 +401,8 @@ struct IndexEntry {
 }
 
 impl Ser for IndexEntry {
-    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+    #[throws(Error)]
+    fn ser(&self, w: &mut impl Write) {
         let flags = if self.encryption.is_some() { 0x1 } else { 0 }
             | if self.compression.is_some() { 0x2 } else { 0 }
             | if self.checksum.is_some() { 0x4 } else { 0 };
@@ -419,12 +421,12 @@ impl Ser for IndexEntry {
         if let Some(checksum) = &self.checksum {
             checksum.ser(w)?;
         }
-        Ok(())
     }
 }
 
 impl Deser for IndexEntry {
-    fn deser(r: &mut impl Read) -> Result<Self, Error> {
+    #[throws(Error)]
+    fn deser(r: &mut impl Read) -> Self {
         let offset = leb128::read::unsigned(r)?;
         let size = leb128::read::unsigned(r)?;
         let flags = leb128::read::unsigned(r)?;
@@ -448,7 +450,7 @@ impl Deser for IndexEntry {
             None
         };
 
-        Ok(Self {
+        Self {
             offset,
             size,
             name,
@@ -456,6 +458,6 @@ impl Deser for IndexEntry {
             compression,
             checksum,
             path: PathBuf::new(),
-        })
+        }
     }
 }

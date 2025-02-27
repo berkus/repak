@@ -1,18 +1,22 @@
 use {
     crate::Error,
+    culpa::throws,
     std::io::{Read, Write},
 };
 
 pub trait Ser {
-    fn ser(&self, w: &mut impl Write) -> Result<(), Error>;
+    #[throws(Error)]
+    fn ser(&self, w: &mut impl Write);
 }
 
 pub trait Deser: Sized {
-    fn deser(r: &mut impl Read) -> Result<Self, Error>;
+    #[throws(Error)]
+    fn deser(r: &mut impl Read) -> Self;
 }
 
 // Calculate written size of an unsigned leb128 representation.
-pub fn leb128_usize(val: u64) -> Result<usize, std::io::Error> {
+#[throws(std::io::Error)]
+pub fn leb128_usize(val: u64) -> usize {
     let mut c = std::io::Cursor::new([0u8; 10]);
-    leb128::write::unsigned(&mut c, val)
+    leb128::write::unsigned(&mut c, val)?
 }

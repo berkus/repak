@@ -3,6 +3,7 @@ use {
         Error,
         io::{Deser, Ser, leb128_usize},
     },
+    culpa::{throw, throws},
     std::io::{Read, Write},
 };
 
@@ -15,27 +16,28 @@ pub(crate) struct EncryptionHeader {
 }
 
 impl Ser for EncryptionHeader {
-    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+    #[throws(Error)]
+    fn ser(&self, w: &mut impl Write) {
         let size = leb128_usize(self.algorithm.into())? + self.payload.len();
         leb128::write::unsigned(w, size as u64)?;
         leb128::write::unsigned(w, self.algorithm.into())?;
         w.write_all(&self.payload)?;
-        Ok(())
     }
 }
 
 impl Deser for EncryptionHeader {
-    fn deser(r: &mut impl Read) -> Result<Self, Error> {
+    #[throws(Error)]
+    fn deser(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         let algorithm = EncryptionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
         let payload = match algorithm {
             EncryptionAlgorithm::NotImplementedYet => vec![],
         };
-        Ok(Self {
+        Self {
             size,
             algorithm,
             payload,
-        })
+        }
     }
 }
 
@@ -55,10 +57,11 @@ impl From<EncryptionAlgorithm> for u64 {
 impl TryFrom<u64> for EncryptionAlgorithm {
     type Error = Error;
 
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
+    #[throws(Self::Error)]
+    fn try_from(value: u64) -> Self {
         match value {
-            0 => Ok(Self::NotImplementedYet),
-            _ => Err(Error::Deser(format!(
+            0 => Self::NotImplementedYet,
+            _ => throw!(Error::Deser(format!(
                 "Unknown encryption algorithm: {}",
                 value
             ))),

@@ -3,6 +3,7 @@ use {
         Error,
         io::{Deser, Ser, leb128_usize},
     },
+    culpa::{throw, throws},
     std::io::{Read, Write},
 };
 
@@ -15,17 +16,18 @@ pub(crate) struct CompressionHeader {
 }
 
 impl Ser for CompressionHeader {
-    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+    #[throws(Error)]
+    fn ser(&self, w: &mut impl Write) {
         let size = leb128_usize(self.algorithm.into())? + self.payload.len();
         leb128::write::unsigned(w, size as u64)?;
         leb128::write::unsigned(w, self.algorithm.into())?;
         w.write_all(&self.payload)?;
-        Ok(())
     }
 }
 
 impl Deser for CompressionHeader {
-    fn deser(r: &mut impl Read) -> Result<Self, Error> {
+    #[throws(Error)]
+    fn deser(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         let algorithm = CompressionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
         let payload = match algorithm {
@@ -37,11 +39,11 @@ impl Deser for CompressionHeader {
             CompressionAlgorithm::Lz4 => vec![],
             CompressionAlgorithm::Fsst => vec![],
         };
-        Ok(Self {
+        Self {
             size,
             algorithm,
             payload,
-        })
+        }
     }
 }
 
@@ -73,16 +75,17 @@ impl From<CompressionAlgorithm> for u64 {
 impl TryFrom<u64> for CompressionAlgorithm {
     type Error = Error;
 
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
+    #[throws(Self::Error)]
+    fn try_from(value: u64) -> Self {
         match value {
-            0 => Ok(Self::None),
-            1 => Ok(Self::Deflate),
-            2 => Ok(Self::Bzip),
-            3 => Ok(Self::Zstd),
-            4 => Ok(Self::Lzma),
-            5 => Ok(Self::Lz4),
-            6 => Ok(Self::Fsst),
-            _ => Err(Error::Deser(format!(
+            0 => Self::None,
+            1 => Self::Deflate,
+            2 => Self::Bzip,
+            3 => Self::Zstd,
+            4 => Self::Lzma,
+            5 => Self::Lz4,
+            6 => Self::Fsst,
+            _ => throw!(Error::Deser(format!(
                 "Unknown compression algorithm: {}",
                 value
             ))),
@@ -102,10 +105,11 @@ pub(crate) enum Decompressor<R: std::io::BufRead> {
 }
 
 impl<R: std::io::BufRead> std::io::Read for Decompressor<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    #[throws(std::io::Error)]
+    fn read(&mut self, buf: &mut [u8]) -> usize {
         match self {
-            Self::Stored(r) => r.read(buf),
-            Self::Inflate(r) => r.read(buf),
+            Self::Stored(r) => r.read(buf)?,
+            Self::Inflate(r) => r.read(buf)?,
             // Self::Bzip(r) => r.read(buf),
             // Self::Zstd(r) => r.read(buf),
             // Self::Lzma(r) => r.read(buf),
