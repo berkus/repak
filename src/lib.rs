@@ -174,7 +174,7 @@ impl REPAK {
             println!("Sorted Entry: {:?}", entry);
             let mut infile = File::open(entry.path.clone())?;
             pakfile.seek(SeekFrom::Start(entry.offset))?;
-            copy(&mut infile, &mut pakfile)?;
+            copy(&mut infile, &mut pakfile)?; // @todo checksum, compress, encrypt here
         }
 
         drop(pakfile);
