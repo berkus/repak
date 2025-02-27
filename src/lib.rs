@@ -106,10 +106,14 @@ pub fn open(input: &Path) -> REPAK {
     }
 }
 
-// Source of the asset data
+/// Source of the asset data
 enum Source {
+    /// File on disk
     File(PathBuf),
+    /// In-memory buffer
     Memory(Vec<u8>),
+    /// Location in REPAK archive
+    Archive(u64, usize),
 }
 
 #[derive(Default, Debug)]
