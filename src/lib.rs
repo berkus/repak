@@ -6,7 +6,7 @@ use {
     crate::{checksum::*, compress::*, encrypt::*, io::Deser},
     byteorder::*,
     culpa::{throw, throws},
-    io::{Ser, leb128_usize},
+    io::{Ser, deser_string, leb128_usize, ser_string},
     std::{
         collections::BTreeMap,
         convert::Infallible,
@@ -21,7 +21,7 @@ mod compress;
 mod encrypt;
 mod io;
 
-pub use {checksum::ChecksumKind, compress::CompressionAlgorithm, encrypt::EncryptionAlgorithm};
+pub use {checksum::Checksum, compress::CompressionAlgorithm, encrypt::EncryptionAlgorithm};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -118,9 +118,35 @@ enum Source {
 
 #[derive(Default, Debug)]
 pub struct AppendOptions {
-    pub checksum: Option<ChecksumKind> = None,
+    pub checksums: Vec<Checksum> = vec![],
     pub compression: Option<CompressionAlgorithm> = None,
     pub encryption: Option<EncryptionAlgorithm> = None,
+}
+
+impl AppendOptions {
+    pub fn with_compression(self, c: CompressionAlgorithm) -> Self {
+        Self {
+            compression: Some(c),
+            ..self
+        }
+    }
+
+    pub fn with_encryption(self, c: EncryptionAlgorithm) -> Self {
+        Self {
+            encryption: Some(c),
+            ..self
+        }
+    }
+
+    pub fn with_checksum(self, c: Checksum) -> Self {
+        let mut checksums = self.checksums;
+        checksums.push(c);
+        Self { checksums, ..self }
+    }
+}
+
+fn passthrough(r: impl Read) -> impl Read {
+    r
 }
 
 impl REPAK {
@@ -131,7 +157,7 @@ impl REPAK {
     pub fn lookup<'a>(&'a self, id: String) -> Option<Entry<'a>> {
         self.index.entries.get(&id).map(|inner| Entry {
             inner,
-            source: Source::Memory(vec![]),
+            source: Source::Archive(inner.offset, inner.size as usize),
         })
     }
 
@@ -141,10 +167,20 @@ impl REPAK {
     /// It is posible to request checksumming, compression, and encryption
     /// (in this order).
     #[throws]
-    pub fn append(&mut self, id: String, file: &Path, _options: AppendOptions) {
+    pub fn append(&mut self, id: String, file: &Path, options: AppendOptions) {
         if self.index.entries.contains_key(&id) {
             throw!(Error::AlreadyExists(id));
         }
+        // need to apply compression and encryption here to calculate in-archive offset and size
+        // a) pick compression based on options
+        // b) pick encryption based on options
+        // c) calculate size
+
+        // this shall be handled by the tooling - pick_best_compression() is provided as a helper.
+        // if options.compression == Some(CompressionAlgorithm::Best) {
+        //     let (compression, temp_file) = pick_best_compression(file)?;
+        // }
+
         let entry = IndexEntry {
             offset: self.last_insertion_offset,
             size: file.metadata()?.len(),
@@ -159,7 +195,7 @@ impl REPAK {
     }
 
     /// Save the archive.
-    #[throws]
+    // #[throws]
     pub fn save(&self) {
         let mut pakfile = File::create(self.file_path.clone())?;
 
@@ -172,9 +208,46 @@ impl REPAK {
         // write the rest
         for entry in sorted {
             println!("Sorted Entry: {:?}", entry);
-            let mut infile = File::open(entry.path.clone())?;
+            let infile = BufReader::new(File::open(entry.path.clone())?);
+
+            let (mut checksummer, checksums) = match entry.checksum {
+                None => (passthrough(infile), vec![]), // just passthrough()?
+                Some(c) => c
+                    .checksums
+                    .iter()
+                    .fold((infile, vec![]), |acc, x| match &x {
+                        Checksum::SHA3(params) => (Checksum::sha3(acc.0), acc.1.push(&params)),
+                        Checksum::K12(params) => (Checksum::k12(acc.0), acc.1.push(&params)),
+                        _ => panic!("Invalid checksum setting"),
+                    }),
+            };
+
+            let mut compressor = match entry.compression {
+                None => passthrough(checksummer),
+                Some(CompressionHeader {
+                    algorithm: CompressionAlgorithm::Deflate,
+                    ..
+                }) => Compressor::deflate(checksummer),
+                _ => panic!("Invalid compression setting"),
+            };
+
+            let mut encryptor = match entry.encryption {
+                Some(EncryptionHeader {
+                    algorithm: EncryptionAlgorithm::None,
+                    ..
+                }) => passthrough(compressor),
+                Some(EncryptionHeader {
+                    algorithm: EncryptionAlgorithm::Xor,
+                    ..
+                }) => Encryptor::xor(compressor, 0),
+                _ => panic!("Invalid encryption setting"),
+            };
+
             pakfile.seek(SeekFrom::Start(entry.offset))?;
-            copy(&mut infile, &mut pakfile)?; // @todo checksum, compress, encrypt here
+            copy(&mut encryptor, &mut pakfile)?; // @todo checksum, compress, encrypt here
+
+            // @todo: update checksummer and encryptor output metadata in the index
+            // entry.checksums = checksums;
         }
 
         drop(pakfile);
@@ -410,8 +483,7 @@ impl Ser for IndexEntry {
         leb128::write::unsigned(w, self.offset)?;
         leb128::write::unsigned(w, self.size)?;
         leb128::write::unsigned(w, flags)?;
-        leb128::write::unsigned(w, self.name.as_bytes().len() as u64)?;
-        w.write_all(&self.name.as_bytes())?;
+        ser_string(w, &self.name)?;
         if let Some(encryption) = &self.encryption {
             encryption.ser(w)?
         }
@@ -430,10 +502,7 @@ impl Deser for IndexEntry {
         let offset = leb128::read::unsigned(r)?;
         let size = leb128::read::unsigned(r)?;
         let flags = leb128::read::unsigned(r)?;
-        let name_len = leb128::read::unsigned(r)?;
-        let mut data = vec![0; name_len as usize];
-        r.read_exact(&mut data)?;
-        let name = String::from_utf8(data)?;
+        let name = deser_string(r)?;
         let encryption = if flags & 0x0001 != 0 {
             Some(EncryptionHeader::deser(r)?)
         } else {

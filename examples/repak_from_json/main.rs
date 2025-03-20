@@ -5,7 +5,7 @@ use {
     anyhow::{Context, Result},
     argh::FromArgs,
     culpa::throws,
-    repak::AppendOptions,
+    repak::{AppendOptions, CompressionAlgorithm},
     serde::Deserialize,
     std::{fs::File, path::PathBuf},
 };
@@ -61,16 +61,16 @@ enum Checksum {
     CityHash,
 }
 
-impl From<Checksum> for repak::ChecksumKind {
+impl From<Checksum> for repak::Checksum {
     fn from(c: Checksum) -> Self {
         match c {
-            Checksum::Sha3 => repak::ChecksumKind::SHA3,
-            Checksum::K12 => repak::ChecksumKind::K12,
-            Checksum::Blake3 => repak::ChecksumKind::BLAKE3,
-            Checksum::Xxhash3 => repak::ChecksumKind::Xxhash3,
-            Checksum::MetroHash => repak::ChecksumKind::MetroHash,
-            Checksum::SeaHash => repak::ChecksumKind::SeaHash,
-            Checksum::CityHash => repak::ChecksumKind::CityHash,
+            Checksum::Sha3 => repak::Checksum::SHA3,
+            Checksum::K12 => repak::Checksum::K12,
+            Checksum::Blake3 => repak::Checksum::BLAKE3,
+            Checksum::Xxhash3 => repak::Checksum::Xxhash3,
+            Checksum::MetroHash => repak::Checksum::MetroHash,
+            Checksum::SeaHash => repak::Checksum::SeaHash,
+            Checksum::CityHash => repak::Checksum::CityHash,
         }
     }
 }
@@ -124,8 +124,19 @@ fn main() {
             .lookup(name.clone())
             .context("Looking up REPAK resource")?;
         if entry.is_none() {
+            let compression: CompressionAlgorithm = if asset.compression == best {
+                let (compression, _) = repak::pick_best_compression(file)?;
+                compression
+            } else {
+                asset.compression.into()
+            };
+
             repak
-                .append(name, &asset.path, AppendOptions::default())
+                .append(
+                    name,
+                    &asset.path,
+                    AppendOptions::default().with_compression(compression),
+                )
                 .context("Adding REPAK resource")?;
             // @todo options
         }

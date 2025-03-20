@@ -4,13 +4,17 @@ use {
         io::{Deser, Ser, leb128_usize},
     },
     culpa::{throw, throws},
-    std::io::{Read, Write},
+    std::{
+        fs::File,
+        io::{Read, Write},
+        path::Path,
+    },
 };
 
 #[derive(Debug)] // temp?
 pub(crate) struct CompressionHeader {
     size: u64,
-    algorithm: CompressionAlgorithm,
+    pub(crate) algorithm: CompressionAlgorithm,
     // TODO: Compression payload parameters
     payload: Vec<u8>,
 }
@@ -127,4 +131,37 @@ pub(crate) enum Compressor<R: std::io::BufRead> {
     // Lzma(lzma::Encoder<W>),
     // Lz4(lz4::Encoder<W>),
     // Fsst(fsst::Encoder<W>),
+}
+
+impl<R: std::io::BufRead> Compressor<R> {
+    pub fn store(r: R) -> Self {
+        Self::Stored(r)
+    }
+
+    pub fn deflate(r: R) -> Self {
+        Self::Deflate(flate2::bufread::DeflateEncoder::new(
+            r,
+            flate2::Compression::default(),
+        ))
+    }
+}
+
+impl<R: std::io::BufRead> std::io::Read for Compressor<R> {
+    #[throws(std::io::Error)]
+    fn read(&mut self, buf: &mut [u8]) -> usize {
+        match self {
+            Self::Stored(r) => r.read(buf)?,
+            Self::Deflate(r) => r.read(buf)?,
+            // Self::Bzip(r) => r.read(buf),
+            // Self::Zstd(r) => r.read(buf),
+            // Self::Lzma(r) => r.read(buf),
+            // Self::Lz4(r) => r.read(buf),
+            // Self::Fsst(r) => r.read(buf),
+        }
+    }
+}
+
+/// Take a source file, run series of compression algorithms, and return the best compressed file.
+pub fn pick_best_compression(file: &Path) -> (CompressionAlgorithm, File) {
+    (CompressionAlgorithm::None, File::open(file).unwrap())
 }

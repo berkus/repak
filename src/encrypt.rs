@@ -9,7 +9,7 @@ use {
 
 #[derive(Debug)] // temp?
 pub(crate) struct EncryptionHeader {
-    algorithm: EncryptionAlgorithm,
+    pub(crate) algorithm: EncryptionAlgorithm,
     size: u64,
     // TODO: Encryption payload parameters
     payload: Vec<u8>,
@@ -43,13 +43,15 @@ impl Deser for EncryptionHeader {
 
 #[derive(Clone, Copy, Debug)]
 pub enum EncryptionAlgorithm {
-    NotImplementedYet,
+    None,
+    Xor,
 }
 
 impl From<EncryptionAlgorithm> for u64 {
     fn from(value: EncryptionAlgorithm) -> u64 {
         match value {
-            EncryptionAlgorithm::NotImplementedYet => 0,
+            EncryptionAlgorithm::None => 0,
+            EncryptionAlgorithm::Xor => 1,
         }
     }
 }
@@ -60,11 +62,27 @@ impl TryFrom<u64> for EncryptionAlgorithm {
     #[throws(Self::Error)]
     fn try_from(value: u64) -> Self {
         match value {
-            0 => Self::NotImplementedYet,
+            0 => Self::None,
+            1 => Self::Xor,
             _ => throw!(Error::Deser(format!(
                 "Unknown encryption algorithm: {}",
                 value
             ))),
         }
+    }
+}
+
+pub(crate) enum Encryptor<R: std::io::BufRead> {
+    None(R),
+    Xor(u8),
+}
+
+impl<R: std::io::BufRead> Encryptor<R> {
+    pub fn passthrough(r: R) -> Self {
+        Self::None(r)
+    }
+
+    pub fn xor(r: R, key: u8) -> Self {
+        Self::Xor(key)
     }
 }
