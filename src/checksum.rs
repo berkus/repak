@@ -10,7 +10,6 @@ use {
 
 #[derive(Default, Debug)]
 pub(crate) struct ChecksumHeader {
-    pub(crate) count: u64, // @todo calculated field
     pub(crate) checksums: Vec<Checksum>,
 }
 
@@ -32,7 +31,7 @@ impl Deser for ChecksumHeader {
         for _ in 0..count {
             checksums.push(Checksum::deser(r)?);
         }
-        Self { count, checksums }
+        Self { checksums }
     }
 }
 
@@ -188,7 +187,7 @@ impl Deser for K12State {
 //     // you could chain multiple checksumming wrapppers
 // }
 
-struct ChecksummingReader<R, C>
+struct ChecksummingRead<R, C>
 where
     R: Read,
     C: Checksummer,
@@ -197,27 +196,24 @@ where
     checksums: Vec<C>,
 }
 
-impl ChecksummingReader {
-    pub fn new(reader: R, checksummers: &[u16]) -> Self {
+impl ChecksummingRead {
+    pub fn new(reader: R, checksummers: &[Checksummer]) -> Self {
         Self {
             reader,
-            checksums: checksummers
-                .map(|id| match id {
-                    0 => SeaHash::default(),
-                    1 => CityHash::default(),
-                    _ => panic!("unknown checksum id"),
-                })
-                .collect(),
+            checksums: checksummers.collect(),
         }
     }
 
-    pub fn finalize(&mut self) -> Vec<[u8; 16]> {
+    pub fn finalize(&mut self) {
         self.checksums.iter_mut().map(|c| c.finalize()).collect()
     }
 }
 
-impl Read for ChecksummingReader {
+impl Read for ChecksummingRead {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         todo!()
+        // read into buf
+        // run all checksummers over buf
+        // return buf
     }
 }

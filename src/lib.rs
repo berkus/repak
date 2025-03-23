@@ -195,7 +195,7 @@ impl REPAK {
     }
 
     /// Save the archive.
-    // #[throws]
+    #[throws]
     pub fn save(&self) {
         let mut pakfile = File::create(self.file_path.clone())?;
 
@@ -211,15 +211,8 @@ impl REPAK {
             let infile = BufReader::new(File::open(entry.path.clone())?);
 
             let (mut checksummer, checksums) = match entry.checksum {
-                None => (passthrough(infile), vec![]), // just passthrough()?
-                Some(c) => c
-                    .checksums
-                    .iter()
-                    .fold((infile, vec![]), |acc, x| match &x {
-                        Checksum::SHA3(params) => (Checksum::sha3(acc.0), acc.1.push(&params)),
-                        Checksum::K12(params) => (Checksum::k12(acc.0), acc.1.push(&params)),
-                        _ => panic!("Invalid checksum setting"),
-                    }),
+                None => ChecksummingRead::new(infile, vec![]),
+                Some(c) => ChecksummingRead::new(infile, c.checksums),
             };
 
             let mut compressor = match entry.compression {
@@ -263,13 +256,7 @@ impl REPAK {
         let idxpath = self.file_path.with_extension("idpak");
         let mut idxfile = File::create(idxpath.clone())?;
 
-        let header = IndexHeader::for_writing(self.index.entries.len() as u64);
-        header.ser(&mut idxfile)?;
-
-        for x in self.index.entries.values() {
-            println!("Entry: {:?}", x);
-            x.ser(&mut idxfile)?;
-        }
+        self.index.ser(&mut idxfile)?;
 
         drop(idxfile);
         let offset = fs::metadata(idxpath.clone())?.len();
@@ -392,33 +379,31 @@ mod index_locator_tests {
 
 #[derive(Default)]
 struct IndexHeader {
-    count: u64,
-    entries: BTreeMap<String, IndexEntry>, // not part of IndexHeader really, but we can construct it here and move?
+    entries: BTreeMap<String, IndexEntry>,
     checksum: ChecksumHeader,
-}
-
-impl IndexHeader {
-    pub fn for_writing(count: u64) -> Self {
-        Self {
-            count,
-            ..Default::default()
-        }
-    }
 }
 
 impl Ser for IndexHeader {
     #[throws(Error)]
     fn ser(&self, w: &mut impl Write) {
+        // @todo Checksum everything we write here! (w should be wrapped in a ChecksummingWrite)
+        // @todo Add zstd compression after checksumming!
         w.write_all(b"REPAK")?;
         w.write_u8(0x1)?; // Version 1
         w.write_u16::<LittleEndian>(0u16)?;
-        leb128::write::unsigned(w, self.count)?;
+        leb128::write::unsigned(w, self.entries.len() as u64)?;
+        for entry in &mut self.entries.values() {
+            println!("Entry: {:?}", entry);
+            entry.ser(w)?;
+        }
+        self.checksum.ser(w)?;
     }
 }
 
 impl Deser for IndexHeader {
     #[throws(Error)]
     fn deser(r: &mut impl Read) -> Self {
+        // wrap r into a ChecksummingRead with all checksummers enabled, to verify the integrity of the index
         let mut buf = [0u8; 5];
         r.read_exact(&mut buf)?;
         // if first four bytes are "0x28, 0xB5, 0x2F, 0xFD" then it's `zstd` compressed
@@ -451,13 +436,11 @@ impl Deser for IndexHeader {
             let entry = IndexEntry::deser(r)?;
             entries.insert(entry.name.clone(), entry);
         }
-        // @todo checksumming
+        let checksum = ChecksumHeader::deser(r)?;
 
-        IndexHeader {
-            count,
-            entries,
-            checksum: ChecksumHeader::default(),
-        }
+        // @todo validate checksums
+
+        IndexHeader { entries, checksum }
     }
 }
 
