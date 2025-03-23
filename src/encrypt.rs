@@ -18,9 +18,8 @@ pub(crate) struct EncryptionHeader {
 impl Ser for EncryptionHeader {
     #[throws(Error)]
     fn ser(&self, w: &mut impl Write) {
-        let size = leb128_usize(self.algorithm.into())? + self.payload.len();
-        leb128::write::unsigned(w, size as u64)?;
         leb128::write::unsigned(w, self.algorithm.into())?;
+        leb128::write::unsigned(w, self.payload.len() as u64)?;
         w.write_all(&self.payload)?;
     }
 }
@@ -28,10 +27,11 @@ impl Ser for EncryptionHeader {
 impl Deser for EncryptionHeader {
     #[throws(Error)]
     fn deser(r: &mut impl Read) -> Self {
-        let size = leb128::read::unsigned(r)?;
         let algorithm = EncryptionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
+        let size = leb128::read::unsigned(r)?;
         let payload = match algorithm {
-            EncryptionAlgorithm::NotImplementedYet => vec![],
+            EncryptionAlgorithm::None => vec![],
+            EncryptionAlgorithm::Xor => vec![],
         };
         Self {
             size,

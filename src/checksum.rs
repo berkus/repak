@@ -42,7 +42,6 @@ pub enum Checksum {
     K12(K12),
     BLAKE3(BLAKE3),
     Xxhash3(Xxhash3),
-    MetroHash(MetroHash),
     SeaHash(SeaHash),
     CityHash(CityHash),
 }
@@ -61,16 +60,14 @@ impl Ser for Checksum {
             Checksum::K12(_) => 2,
             Checksum::BLAKE3(_) => 3,
             Checksum::Xxhash3(_) => 4,
-            Checksum::MetroHash(_) => 5,
-            Checksum::SeaHash(_) => 6,
-            Checksum::CityHash(_) => 7,
+            Checksum::SeaHash(_) => 5,
+            Checksum::CityHash(_) => 6,
         })?;
         match self {
             Checksum::SHA3(sha3) => sha3.ser(w)?,
             Checksum::K12(k12) => k12.ser(w)?,
             Checksum::BLAKE3(blake3) => blake3.ser(w)?,
             Checksum::Xxhash3(xxhash3) => xxhash3.ser(w)?,
-            Checksum::MetroHash(metrohash) => metrohash.ser(w)?,
             Checksum::SeaHash(seahash) => seahash.ser(w)?,
             Checksum::CityHash(cityhash) => cityhash.ser(w)?,
         };
@@ -86,9 +83,8 @@ impl Deser for Checksum {
             2 => Checksum::K12(K12::deser(r)?),
             3 => Checksum::BLAKE3(BLAKE3::deser(r)?),
             4 => Checksum::Xxhash3(Xxhash3::deser(r)?),
-            5 => Checksum::MetroHash(MetroHash::deser(r)?),
-            6 => Checksum::SeaHash(SeaHash::deser(r)?),
-            7 => Checksum::CityHash(CityHash::deser(r)?),
+            5 => Checksum::SeaHash(SeaHash::deser(r)?),
+            6 => Checksum::CityHash(CityHash::deser(r)?),
             _ => throw!(Error::Deser(format!("Unknown checksum kind: {kind}"))),
         }
     }
@@ -101,36 +97,68 @@ impl Deser for Checksum {
 ///=============================================================================
 ///=============================================================================
 
-#[derive(Default, Debug, Clone, Copy)]
-struct SHA3 {
-    digest: [u8; 32],
+trait Checksummer {
+    fn update(&mut self, data: &[u8]);
+    fn finalize(&mut self);
 }
 
-impl Ser for SHA3 {
-    #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        w.write_all(&self.digest)?;
-    }
+macro_rules! declare_checksummer {
+    ($name:ident, $state:ty, $digest:ty) => {
+        /// Calculate the $name checksum of a byte slice.
+        #[derive(Default, Debug, Clone, Copy)]
+        struct $name {
+            state: $state,
+            digest: $digest,
+        }
+
+        impl Ser for $name {
+            #[throws(Error)]
+            fn ser(&self, w: &mut impl Write) {
+                w.write_all(&self.digest)?;
+            }
+        }
+
+        impl Deser for $name {
+            #[throws(Error)]
+            fn deser(r: &mut impl Read) -> Self {
+                let mut s = Self {
+                    digest: <$digest>::default(),
+                    state: <$state>::default(),
+                };
+                r.read(&mut s.digest)?;
+                s
+            }
+        }
+
+        impl Checksummer for $name {
+            fn update(&mut self, data: &[u8]) {
+                self.state.update(data);
+            }
+
+            fn finalize(&mut self) {
+                self.digest = self.state.finalize();
+            }
+        }
+    };
 }
 
-impl Deser for SHA3 {
-    #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        let mut s = Self { digest: [0u8; 32] };
-        r.read(&mut s.digest)?;
-        s
-    }
-}
+declare_checksummer!(SHA3, tiny_keccak::Sha3, [u8; 32]);
+declare_checksummer!(BLAKE3, blake3::Hasher, [u8; 32]);
+declare_checksummer!(K12, tiny_keccak::K12, K12State);
+declare_checksummer!(Xxhash3, twoxhash::XxHash128, [u8; 16]);
+// declare_checksummer!(MetroHash, fasthash::MetroHash, [u8; 16]);
+declare_checksummer!(SeaHash, seahash::SeaHash, [u8; 8]);
+declare_checksummer!(CityHash, cityhash_rs::CityHash128, [u8; 16]);
 
 ///=============================================================================
 
 #[derive(Default, Debug, Clone)]
-struct K12 {
+struct K12State {
     primer: String,
     digest: [u8; 32],
 }
 
-impl Ser for K12 {
+impl Ser for K12State {
     #[throws(Error)]
     fn ser(&self, w: &mut impl Write) {
         ser_string(w, &self.primer)?;
@@ -138,7 +166,7 @@ impl Ser for K12 {
     }
 }
 
-impl Deser for K12 {
+impl Deser for K12State {
     #[throws(Error)]
     fn deser(r: &mut impl Read) -> Self {
         let mut s = Self {
@@ -146,111 +174,6 @@ impl Deser for K12 {
             digest: [0u8; 32],
         };
         s.primer = deser_string(r)?;
-        r.read(&mut s.digest)?;
-        s
-    }
-}
-
-#[derive(Default, Debug, Clone, Copy)]
-struct BLAKE3 {
-    digest: [u8; 32],
-}
-
-impl Ser for BLAKE3 {
-    #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        w.write_all(&self.digest)?;
-    }
-}
-
-impl Deser for BLAKE3 {
-    #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        let mut s = Self { digest: [0u8; 32] };
-        r.read(&mut s.digest)?;
-        s
-    }
-}
-
-#[derive(Default, Debug, Clone, Copy)]
-struct Xxhash3 {
-    digest: [u8; 16],
-}
-
-impl Ser for Xxhash3 {
-    #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        w.write_all(&self.digest)?;
-    }
-}
-
-impl Deser for Xxhash3 {
-    #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        let mut s = Self { digest: [0u8; 16] };
-        r.read(&mut s.digest)?;
-        s
-    }
-}
-
-#[derive(Default, Debug, Clone, Copy)]
-struct MetroHash {
-    digest: [u8; 16],
-}
-
-impl Ser for MetroHash {
-    #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        w.write_all(&self.digest)?;
-    }
-}
-
-impl Deser for MetroHash {
-    #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        let mut s = Self { digest: [0u8; 16] };
-        r.read(&mut s.digest)?;
-        s
-    }
-}
-
-#[derive(Default, Debug, Clone, Copy)]
-struct SeaHash {
-    digest: [u8; 8],
-}
-
-impl Ser for SeaHash {
-    #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        w.write_all(&self.digest)?;
-    }
-}
-
-impl Deser for SeaHash {
-    #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        let mut s = Self { digest: [0u8; 8] };
-        r.read(&mut s.digest)?;
-        s
-    }
-}
-
-#[derive(Default, Debug, Clone, Copy)]
-struct CityHash {
-    digest: [u8; 16],
-}
-
-impl Ser for CityHash {
-    #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        w.write_all(&self.digest)?;
-    }
-}
-
-impl Deser for CityHash {
-    #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        let mut s = Self { digest: [0u8; 16] };
         r.read(&mut s.digest)?;
         s
     }
@@ -265,3 +188,37 @@ impl Deser for CityHash {
 //     // return a Read impl that wraps the source Read with checksumming state
 //     // you could chain multiple checksumming wrapppers
 // }
+
+struct ChecksummingReader<R, C>
+where
+    R: Read,
+    C: Checksummer,
+{
+    reader: R,
+    checksums: Vec<C>,
+}
+
+impl ChecksummingReader {
+    pub fn new(reader: R, checksummers: &[u16]) -> Self {
+        Self {
+            reader,
+            checksums: checksummers
+                .map(|id| match id {
+                    0 => SeaHash::default(),
+                    1 => CityHash::default(),
+                    _ => panic!("unknown checksum id"),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn finalize(&mut self) -> Vec<[u8; 16]> {
+        self.checksums.iter_mut().map(|c| c.finalize()).collect()
+    }
+}
+
+impl Read for ChecksummingReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        todo!()
+    }
+}
