@@ -53,8 +53,6 @@ enum Checksum {
     Blake3,
     #[serde(rename = "xxhash3-256")]
     Xxhash3,
-    #[serde(rename = "metrohash-128")]
-    MetroHash,
     #[serde(rename = "seahash")]
     SeaHash,
     #[serde(rename = "cityhash")]
@@ -68,7 +66,6 @@ impl From<Checksum> for repak::Checksum {
             Checksum::K12 => repak::Checksum::K12,
             Checksum::Blake3 => repak::Checksum::BLAKE3,
             Checksum::Xxhash3 => repak::Checksum::Xxhash3,
-            Checksum::MetroHash => repak::Checksum::MetroHash,
             Checksum::SeaHash => repak::Checksum::SeaHash,
             Checksum::CityHash => repak::Checksum::CityHash,
         }

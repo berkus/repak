@@ -136,13 +136,12 @@ Keep in mind that the purpose of these checksums is to validate integrity of the
 | Type ID | Checksum      | Payload format and size                         |
 | ------- | ------------- | ----------------------------------------------- |
 | 0x0000  | Reserved      | Do not use.                                     |
-| 0x0001  | sha3          | 32 bytes of binary hash output                  |
+| 0x0001  | sha3-256      | 32 bytes of binary hash output                  |
 | 0x0002  | k12-256       | K12_256_Payload                                 |
 | 0x0003  | blake3-256    | 32 bytes of binary hash output                  |
 | 0x0004  | xxhash3-128   | 16 bytes of binary hash output of XXH3_128.     |
-| 0x0005  | metrohash-128 | 16 bytes of binary hash output of metrohash128. |
-| 0x0006  | seahash       | 8 bytes of binary hash output.                  |
-| 0x0008  | cityhash-128  | 16 bytes of binary hash output.                 |
+| 0x0005  | seahash-64    | 8 bytes of binary hash output.                  |
+| 0x0006  | cityhash-128  | 16 bytes of binary hash output.                 |
 
 K12_256_Payload:
 

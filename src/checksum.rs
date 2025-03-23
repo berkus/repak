@@ -145,10 +145,9 @@ macro_rules! declare_checksummer {
 declare_checksummer!(SHA3, tiny_keccak::Sha3, [u8; 32]);
 declare_checksummer!(BLAKE3, blake3::Hasher, [u8; 32]);
 declare_checksummer!(K12, tiny_keccak::K12, K12State);
-declare_checksummer!(Xxhash3, twoxhash::XxHash128, [u8; 16]);
-// declare_checksummer!(MetroHash, fasthash::MetroHash, [u8; 16]);
-declare_checksummer!(SeaHash, seahash::SeaHash, [u8; 8]);
-declare_checksummer!(CityHash, cityhash_rs::CityHash128, [u8; 16]);
+declare_checksummer!(Xxhash3, twox_hash::XxHash3_128, [u8; 16]);
+declare_checksummer!(SeaHash, seahash::SeaHasher, [u8; 8]);
+declare_checksummer!(CityHash, cityhash_rs::CityHash128, [u8; 16]); // fns, needs struct wrapper..
 
 ///=============================================================================
 
