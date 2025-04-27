@@ -1,6 +1,4 @@
 #![feature(default_field_values)]
-#![allow(dead_code)]
-#![allow(unused_imports)]
 
 use {
     crate::{checksum::*, compress::*, encrypt::*, io::Deser},
@@ -39,12 +37,57 @@ pub enum Error {
     Deser(String),
     #[error("Asset {0} already exists in the archive")]
     AlreadyExists(String),
+    #[error("Unsupported compression algorithm: {0}")]
+    UnsupportedCompression(String),
+    #[error("Unsupported encryption algorithm: {0}")]
+    UnsupportedEncryption(String),
+    #[error("Checksum verification failed for {0}")]
+    ChecksumMismatch(String),
+    #[error("Decompression failed: {0}")]
+    DecompressionError(String),
+    #[error("Decryption failed: {0}")]
+    DecryptionError(String),
+    #[error("Invalid format: {0}")]
+    InvalidFormat(String),
 }
 
-/// Public interface
+/// Public interface for a REPAK archive.  
 ///
-/// Open or create a repak archive, lookup or append files, save.
-/// Encrypt, compress, checksum.
+/// A REPAK archive is a binary file format for packaging assets, similar to Quake PAK or DOOM WAD files.
+/// It supports compression, encryption, and checksumming of assets.
+/// 
+/// # Features
+/// - Append-only file structure
+/// - Multiple compression algorithms (deflate, bzip2, zstd, lzma, lz4, fsst)
+/// - Encryption support
+/// - Multiple checksumming methods (SHA3, K12, BLAKE3, XXHash3, SeaHash, CityHash)
+/// - Index structure for quickly locating assets
+///
+/// # Example
+/// ```no_run
+/// use repak::{create, CompressionAlgorithm, AppendOptions};
+/// use std::path::Path;
+///
+/// // Create a new archive
+/// let mut archive = create(Path::new("assets.repak")).unwrap();
+///
+/// // Add a file with default options
+/// archive.append(
+///     "texture.png".to_string(), 
+///     Path::new("assets/texture.png"), 
+///     AppendOptions::default()
+/// ).unwrap();
+///
+/// // Add a file with compression
+/// archive.append(
+///     "model.fbx".to_string(), 
+///     Path::new("assets/model.fbx"), 
+///     AppendOptions::default().with_compression(CompressionAlgorithm::Deflate)
+/// ).unwrap();
+///
+/// // Save the archive
+/// archive.save().unwrap();
+/// ```
 pub struct REPAK {
     index: IndexHeader,
     index_attached: bool,
@@ -58,6 +101,56 @@ pub struct REPAK {
 pub struct Entry<'a> {
     inner: &'a IndexEntry,
     source: Source,
+}
+
+impl<'a> Entry<'a> {
+    /// Returns the name of the entry
+    pub fn name(&self) -> &str {
+        &self.inner.name
+    }
+    
+    /// Returns the size of the entry in the archive
+    pub fn size(&self) -> u64 {
+        self.inner.size
+    }
+    
+    /// Returns the offset of the entry in the archive
+    pub fn offset(&self) -> u64 {
+        self.inner.offset
+    }
+    
+    /// Returns true if the entry is compressed
+    pub fn is_compressed(&self) -> bool {
+        self.inner.compression.is_some()
+    }
+    
+    /// Returns true if the entry is encrypted
+    pub fn is_encrypted(&self) -> bool {
+        self.inner.encryption.is_some()
+    }
+    
+    /// Returns true if the entry has checksums
+    pub fn has_checksums(&self) -> bool {
+        self.inner.checksum.is_some()
+    }
+    
+    /// Extracts the entry to the specified path
+    #[throws(Error)]
+    pub fn extract_to(&self, path: &Path) {
+        // Implementation would open the source file,
+        // decrypt and decompress the data while verifying checksums,
+        // and write it to the output path
+        todo!("Implement extraction");
+    }
+    
+    /// Returns a reader that provides the raw content of the entry
+    #[throws(Error)]
+    pub fn reader(&self) -> impl Read {
+        // Implementation would open the source,
+        // apply decryption and decompression as needed,
+        // and return a reader
+        todo!("Implement reader");
+    }
 }
 
 /// Create a new repak archive.
@@ -116,6 +209,30 @@ enum Source {
     Archive(u64, usize),
 }
 
+/// Options for appending a file to a REPAK archive.
+///
+/// These options control how the file is processed when added to the archive:
+/// - Checksums: Which hash algorithms to use for validating the file's integrity
+/// - Compression: Which compression algorithm to use (if any)
+/// - Encryption: Which encryption algorithm to use (if any)
+///
+/// # Example
+/// ```no_run
+/// use repak::{AppendOptions, CompressionAlgorithm, EncryptionAlgorithm, Checksum};
+///
+/// // Default options (no compression, no encryption, no checksums)
+/// let default_options = AppendOptions::default();
+///
+/// // With compression only
+/// let compressed = AppendOptions::default()
+///     .with_compression(CompressionAlgorithm::Deflate);
+///
+/// // With compression and checksums
+/// let secure = AppendOptions::default()
+///     .with_compression(CompressionAlgorithm::Zstd)
+///     .with_checksum(Checksum::SHA3(Default::default()))
+///     .with_checksum(Checksum::BLAKE3(Default::default()));
+/// ```
 #[derive(Default, Debug)]
 pub struct AppendOptions {
     pub checksums: Vec<Checksum> = vec![],

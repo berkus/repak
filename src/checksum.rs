@@ -209,11 +209,16 @@ impl ChecksummingRead {
     }
 }
 
-impl Read for ChecksummingRead {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        todo!()
-        // read into buf
-        // run all checksummers over buf
-        // return buf
+impl<R: Read, C: Checksummer> Read for ChecksummingRead<R, C> {
+    #[throws(std::io::Error)]
+    fn read(&mut self, buf: &mut [u8]) -> usize {
+        let bytes_read = self.reader.read(buf)?;
+        if bytes_read > 0 {
+            // Update all checksummers with the data that was read
+            for checksummer in &mut self.checksums {
+                checksummer.update(&buf[0..bytes_read]);
+            }
+        }
+        bytes_read
     }
 }
