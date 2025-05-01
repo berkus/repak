@@ -96,7 +96,7 @@ impl Deser for Checksum {
 ///=============================================================================
 ///=============================================================================
 
-trait Checksummer {
+trait Checksummer: 'static + Send {
     fn update(&mut self, data: &[u8]);
     fn finalize(&mut self);
 }
@@ -187,35 +187,37 @@ impl Deser for K12State {
 //     // you could chain multiple checksumming wrapppers
 // }
 
-struct ChecksummingRead<R, C>
-where
-    R: Read,
-    C: Checksummer,
-{
+struct ChecksummingRead<R: Read> {
     reader: R,
-    checksums: Vec<C>,
+    checksummers: Vec<Box<dyn Checksummer>>,
 }
 
-impl ChecksummingRead {
-    pub fn new(reader: R, checksummers: &[Checksummer]) -> Self {
+impl<R: Read> ChecksummingRead<R> {
+    pub fn new(reader: R, checksummers: Vec<Box<dyn Checksummer>>) -> Self {
         Self {
             reader,
-            checksums: checksummers.collect(),
+            checksummers,
         }
     }
 
     pub fn finalize(&mut self) {
-        self.checksums.iter_mut().map(|c| c.finalize()).collect()
+        for checksummer in &mut self.checksummers {
+            checksummer.finalize();
+        }
+    }
+    
+    pub fn get_checksummers(&self) -> &Vec<Box<dyn Checksummer>> {
+        &self.checksummers
     }
 }
 
-impl<R: Read, C: Checksummer> Read for ChecksummingRead<R, C> {
+impl<R: Read> Read for ChecksummingRead<R> {
     #[throws(std::io::Error)]
     fn read(&mut self, buf: &mut [u8]) -> usize {
         let bytes_read = self.reader.read(buf)?;
         if bytes_read > 0 {
             // Update all checksummers with the data that was read
-            for checksummer in &mut self.checksums {
+            for checksummer in &mut self.checksummers {
                 checksummer.update(&buf[0..bytes_read]);
             }
         }
