@@ -93,7 +93,6 @@ The standard REPAK implementation will return an error when attempting to decomp
 | 0x0003       | zstd      | Generic decompression parameters                          |
 | 0x0004       | lzma (xz) | Generic decompression parameters                          |
 | 0x0005       | LZ4       | Generic decompression parameters                          |
-| 0x0006       | fsst      | Fast String Compression, Generic decompression parameters |
 
 ### Generic decompression parameters
 
