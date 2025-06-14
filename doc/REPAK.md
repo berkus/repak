@@ -64,9 +64,13 @@ Encryption algorithms are classified into standard and custom.
 
 The standard REPAK implementation will return an error when attempting to decrypt custom encrypted content. You can still extract the encrypted blob though.
 
-| Algorithm ID | Algorithm                           | Parameters size and format |
-| ------------ | ----------------------------------- | -------------------------- |
-| @TODO        | Define some file encryption formats |                            |
+| Algorithm ID | Algorithm        | Parameters size and format                      |
+| ------------ | ---------------- | ----------------------------------------------- |
+| 0            | Reserved         | Do not use                                      |
+| 1            | AES-XTS-256      | None, the keys are provided externally.         | xts-mode
+| 2            | HCTR2            | None, the keys are provided externally.         | hctr2 (aes-xctr+polyval)
+| 3            | Adiantum         | ??                                              | adiantum
+| 4            | Threefish-1024   | Block size (256, 512 and 1024 bits block sizes) | threefish
 
 ## Compression
 
