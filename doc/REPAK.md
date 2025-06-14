@@ -134,7 +134,7 @@ The standard REPAK implementation will return an error when attempting to read c
 
 ### Checksum payloads
 
-Keep in mind that the purpose of these checksums is to validate integrity of the payload, i.e. that the decrypted and decompressed bytes are matching the original payload that was added. It is not a cryptographic hash. If one is needed - it should be added to the Encryption header with some MAC (a non-encrypting HMAC verification shall be possible via Encryption header also - #todo).
+Keep in mind that the purpose of these checksums is to validate integrity of the payload, i.e. that the decrypted and decompressed bytes are matching the original payload that was added. A HMAC-like validation of authenticity of the data is outside the scope of this format.
 
 | Type ID | Checksum      | Payload format and size                         |
 | ------- | ------------- | ----------------------------------------------- |
@@ -148,11 +148,11 @@ Keep in mind that the purpose of these checksums is to validate integrity of the
 
 K12_256_Payload:
 
-| Offset | Size   | Content          | Description                                                                                                                                                   |
-| ------ | ------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0      | uleb64 | size_seed_string | Size of the following string seed                                                                                                                             |
-| ?      | ?      | seed_string      | The seed used for starting K12 as a UTF-8 string.<br><br>This string is not reconstructed to unicode and is used as a byte array to initialize k12 algorithm. |
-| ?      | 32     | hash_output      | The 256 bit binary hash output                                                                                                                                |
+| Offset | Size   | Content          | Description                                                                 |
+| ------ | ------ | ---------------- | --------------------------------------------------------------------------- |
+| 0      | uleb64 | size_seed        | Size of the following seed byte array                                       |
+| ?      | ?      | seed             | The seed used for starting K12 as a byte array to initialize k12 algorithm. |
+| ?      | 32     | hash_output      | The 256 bit binary hash output                                              |
 
 # Payloads
 
