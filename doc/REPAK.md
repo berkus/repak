@@ -91,7 +91,7 @@ The standard REPAK implementation will return an error when attempting to decomp
 
 | Algorithm ID | Algorithm | Parameters size and format                                |
 | ------------ | --------- | --------------------------------------------------------- |
-| 0x0000       | reserved  | Do not use.                                               |
+| 0x0000       | Reserved  | Do not use.                                               |
 | 0x0001       | deflate   | RFC 1951, gzip-like, Generic decompression parameters     |
 | 0x0002       | bzip2     | Generic decompression parameters                          |
 | 0x0003       | zstd      | Generic decompression parameters                          |
