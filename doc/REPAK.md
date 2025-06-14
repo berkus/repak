@@ -1,4 +1,4 @@
-Asset library format similar in idea to Quake PAK or DOOM WAD files. The file is append-only, making it easy to insert new entries at the end, but removing older entries may require repacking the whole file.
+Asset library format similar in idea to Quake PAK or DOOM WAD files. The file is append-only, making it easy to insert new entries at the end, but removing older entries may require repacking the whole file. It is a nice format to use when assembling assets in the final game build, for example.
 
 # Overall file structure
 
@@ -43,9 +43,9 @@ Entries are variable sized,
 |        | All other flags | Reserved          | Must not be used.                                                                                                                                                                                          |
 | ?      | uleb64          | Name length       | Length of the following name, there are no \0 terminators.                                                                                                                                                 |
 | ?      | Name length     | Name              | UTF-8 name of the asset.<br><br>There are no limits on how asset names are structured as long as they are valid UTF-8 strings.<br><br>One can use plain names, paths, dot delimited names, whatever works. |
-| ?      | ?               | EncryptionHeader  | Optional, if Encryption bit is set in Flags                                                                                                                                                                |
-| ?      | ?               | CompressionHeader | Optional, if Compression bit is set in Flags                                                                                                                                                               |
-| ?      | ?               | ChecksumHeader    | Optional, if Checksum bit is set in Flags                                                                                                                                                                  |
+| ?      | ?               | EncryptionHeader  | Optional, present if Encryption bit is set in Flags                                                                                                                                                                |
+| ?      | ?               | CompressionHeader | Optional, present if Compression bit is set in Flags                                                                                                                                                               |
+| ?      | ?               | ChecksumHeader    | Optional, present if Checksum bit is set in Flags                                                                                                                                                                  |
 
 ## Encryption
 
@@ -67,10 +67,10 @@ The standard REPAK implementation will return an error when attempting to decryp
 | Algorithm ID | Algorithm        | Parameters size and format                      |
 | ------------ | ---------------- | ----------------------------------------------- |
 | 0            | Reserved         | Do not use                                      |
-| 1            | AES-XTS-256      | None, the keys are provided externally.         | xts-mode
-| 2            | HCTR2            | None, the keys are provided externally.         | hctr2 (aes-xctr+polyval)
-| 3            | Adiantum         | ??                                              | adiantum
-| 4            | Threefish-1024   | Block size (256, 512 and 1024 bits block sizes) | threefish
+| 1            | AES-XTS-256      | None, the keys are provided externally.         |
+| 2            | HCTR2            | None, the keys are provided externally.         |
+| 3            | Adiantum         | None, the keys are provided externally.         |
+| 4            | Threefish-1024   | Block size (256, 512 and 1024 bits block sizes) |
 
 ## Compression
 
