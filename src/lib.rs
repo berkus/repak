@@ -7,7 +7,6 @@ use {
     io::{Ser, deser_string, leb128_usize, ser_string},
     std::{
         collections::BTreeMap,
-        convert::Infallible,
         fs::{self, File, OpenOptions},
         io::{BufReader, Cursor, Read, Seek, SeekFrom, Write, copy},
         path::{Path, PathBuf},
@@ -51,11 +50,11 @@ pub enum Error {
     InvalidFormat(String),
 }
 
-/// Public interface for a REPAK archive.  
+/// Public interface for a REPAK archive.
 ///
 /// A REPAK archive is a binary file format for packaging assets, similar to Quake PAK or DOOM WAD files.
 /// It supports compression, encryption, and checksumming of assets.
-/// 
+///
 /// # Features
 /// - Append-only file structure
 /// - Multiple compression algorithms (deflate, bzip2, zstd, lzma, lz4, fsst)
@@ -73,15 +72,15 @@ pub enum Error {
 ///
 /// // Add a file with default options
 /// archive.append(
-///     "texture.png".to_string(), 
-///     Path::new("assets/texture.png"), 
+///     "texture.png".to_string(),
+///     Path::new("assets/texture.png"),
 ///     AppendOptions::default()
 /// ).unwrap();
 ///
 /// // Add a file with compression
 /// archive.append(
-///     "model.fbx".to_string(), 
-///     Path::new("assets/model.fbx"), 
+///     "model.fbx".to_string(),
+///     Path::new("assets/model.fbx"),
 ///     AppendOptions::default().with_compression(CompressionAlgorithm::Deflate)
 /// ).unwrap();
 ///
@@ -108,32 +107,32 @@ impl<'a> Entry<'a> {
     pub fn name(&self) -> &str {
         &self.inner.name
     }
-    
+
     /// Returns the size of the entry in the archive
     pub fn size(&self) -> u64 {
         self.inner.size
     }
-    
+
     /// Returns the offset of the entry in the archive
     pub fn offset(&self) -> u64 {
         self.inner.offset
     }
-    
+
     /// Returns true if the entry is compressed
     pub fn is_compressed(&self) -> bool {
         self.inner.compression.is_some()
     }
-    
+
     /// Returns true if the entry is encrypted
     pub fn is_encrypted(&self) -> bool {
         self.inner.encryption.is_some()
     }
-    
+
     /// Returns true if the entry has checksums
     pub fn has_checksums(&self) -> bool {
         self.inner.checksum.is_some()
     }
-    
+
     /// Extracts the entry to the specified path
     #[throws(Error)]
     pub fn extract_to(&self, path: &Path) {
@@ -142,14 +141,15 @@ impl<'a> Entry<'a> {
         // and write it to the output path
         todo!("Implement extraction");
     }
-    
+
     /// Returns a reader that provides the raw content of the entry
     #[throws(Error)]
     pub fn reader(&self) -> impl Read {
         // Implementation would open the source,
         // apply decryption and decompression as needed,
         // and return a reader
-        todo!("Implement reader");
+        // For now, return an empty cursor as placeholder
+        std::io::Cursor::new(Vec::<u8>::new())
     }
 }
 
@@ -230,8 +230,8 @@ enum Source {
 /// // With compression and checksums
 /// let secure = AppendOptions::default()
 ///     .with_compression(CompressionAlgorithm::Zstd)
-///     .with_checksum(Checksum::SHA3(Default::default()))
-///     .with_checksum(Checksum::BLAKE3(Default::default()));
+///     .with_checksum(Checksum::new_sha3())
+///     .with_checksum(Checksum::new_blake3());
 /// ```
 #[derive(Default, Debug)]
 pub struct AppendOptions {
@@ -355,7 +355,7 @@ impl REPAK {
                     {
                         Box::new(checksummer)
                     }
-                },
+                }
                 _ => Box::new(checksummer),
             };
 
@@ -374,7 +374,7 @@ impl REPAK {
                     let buf_reader = BufReader::new(reader);
                     // Not properly implemented yet
                     Box::new(buf_reader)
-                },
+                }
                 _ => reader,
             };
 
@@ -504,18 +504,20 @@ mod index_locator_tests {
     #[test]
     fn locator_close_to_10bytes() {
         let (buf, check) = prep(u64::MAX / 4);
-        assert_eq!(buf, vec![
-            0x40, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x88
-        ]);
+        assert_eq!(
+            buf,
+            vec![0x40, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x88]
+        );
         assert_eq!(check, u64::MAX / 4 + 9);
     }
 
     #[test]
     fn locator_edgecase_10bytes() {
         let (buf, check) = prep(u64::MAX / 10 * 9);
-        assert_eq!(buf, vec![
-            0x01, 0xe6, 0xb3, 0x99, 0xcc, 0xe6, 0xb3, 0x99, 0xcc, 0xeb
-        ]);
+        assert_eq!(
+            buf,
+            vec![0x01, 0xe6, 0xb3, 0x99, 0xcc, 0xe6, 0xb3, 0x99, 0xcc, 0xeb]
+        );
         assert_eq!(check, u64::MAX / 10 * 9 + 10);
     }
 }

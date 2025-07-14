@@ -62,12 +62,12 @@ enum Checksum {
 impl From<Checksum> for repak::Checksum {
     fn from(c: Checksum) -> Self {
         match c {
-            Checksum::Sha3 => repak::Checksum::SHA3,
-            Checksum::K12 => repak::Checksum::K12,
-            Checksum::Blake3 => repak::Checksum::BLAKE3,
-            Checksum::Xxhash3 => repak::Checksum::Xxhash3,
-            Checksum::SeaHash => repak::Checksum::SeaHash,
-            Checksum::CityHash => repak::Checksum::CityHash,
+            Checksum::Sha3 => repak::Checksum::new_sha3(),
+            Checksum::K12 => repak::Checksum::new_k12("".to_string()),
+            Checksum::Blake3 => repak::Checksum::new_blake3(),
+            Checksum::Xxhash3 => repak::Checksum::new_xxhash3(),
+            Checksum::SeaHash => repak::Checksum::new_seahash(),
+            Checksum::CityHash => repak::Checksum::new_cityhash(),
         }
     }
 }
@@ -125,7 +125,7 @@ fn main() {
                 Some(Compression::Best) => {
                     let (compression, _) = repak::pick_best_compression(&asset.path)?;
                     compression
-                },
+                }
                 Some(Compression::Zstd) => CompressionAlgorithm::Zstd,
                 Some(Compression::None) => CompressionAlgorithm::None,
                 None => {
@@ -134,7 +134,7 @@ fn main() {
                         Some(Compression::Best) => {
                             let (compression, _) = repak::pick_best_compression(&asset.path)?;
                             compression
-                        },
+                        }
                         Some(Compression::Zstd) => CompressionAlgorithm::Zstd,
                         Some(Compression::None) | None => CompressionAlgorithm::None,
                     }
