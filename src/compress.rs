@@ -95,6 +95,7 @@ impl TryFrom<u64> for CompressionAlgorithm {
 /// Decompress data from the given reader.
 pub(crate) enum Decompressor<R: std::io::BufRead> {
     Stored(R),
+    #[cfg(feature = "compress-deflate")]
     Inflate(flate2::bufread::DeflateDecoder<R>),
     #[cfg(feature = "compress-bzip")]
     Bzip(bzip2::read::BzDecoder<R>),
@@ -111,6 +112,7 @@ impl<R: std::io::BufRead> std::io::Read for Decompressor<R> {
     fn read(&mut self, buf: &mut [u8]) -> usize {
         match self {
             Self::Stored(r) => r.read(buf)?,
+            #[cfg(feature = "compress-deflate")]
             Self::Inflate(r) => r.read(buf)?,
             #[cfg(feature = "compress-bzip")]
             Self::Bzip(r) => r.read(buf)?,
@@ -127,11 +129,12 @@ impl<R: std::io::BufRead> std::io::Read for Decompressor<R> {
 
 pub(crate) enum Compressor<R: std::io::BufRead> {
     Stored(R),
+    #[cfg(feature = "compress-deflate")]
     Deflate(flate2::bufread::DeflateEncoder<R>),
     #[cfg(feature = "compress-bzip")]
     Bzip(bzip2::read::BzEncoder<R>),
     #[cfg(feature = "compress-zstd")]
-    Zstd(zstd::stream::write::Encoder<Vec<u8>>),
+    Zstd(zstd::stream::write::Encoder<'static, Vec<u8>>),
     #[cfg(feature = "compress-lzma")]
     Lzma(xz2::read::XzEncoder<R>),
     #[cfg(feature = "compress-lz4")]
@@ -144,10 +147,17 @@ impl<R: std::io::BufRead> Compressor<R> {
     }
 
     pub fn deflate(r: R) -> Self {
-        Self::Deflate(flate2::bufread::DeflateEncoder::new(
-            r,
-            flate2::Compression::default(),
-        ))
+        #[cfg(feature = "compress-deflate")]
+        {
+            Self::Deflate(flate2::bufread::DeflateEncoder::new(
+                r,
+                flate2::Compression::default(),
+            ))
+        }
+        #[cfg(not(feature = "compress-deflate"))]
+        {
+            Self::Stored(r)
+        }
     }
 
     #[cfg(feature = "compress-bzip")]
@@ -183,6 +193,7 @@ impl<R: std::io::BufRead> std::io::Read for Compressor<R> {
     fn read(&mut self, buf: &mut [u8]) -> usize {
         match self {
             Self::Stored(r) => r.read(buf)?,
+            #[cfg(feature = "compress-deflate")]
             Self::Deflate(r) => r.read(buf)?,
             #[cfg(feature = "compress-bzip")]
             Self::Bzip(r) => r.read(buf)?,
