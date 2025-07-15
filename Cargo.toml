@@ -16,15 +16,37 @@ categories = [
 
 [features]
 default = ["all-checksums", "all-compression", "all-encryption"]
-all-checksums = [
-    "dep:twox-hash",
-    "dep:tiny-keccak",
-    "dep:seahash",
-    "dep:blake3",
-    "dep:cityhash-rs",
+all-compression = [
+    "compress-deflate",
+    "compress-bzip",
+    "compress-zstd",
+    "compress-lzma",
+    "compress-lz4",
 ]
-all-compression = ["dep:flate2", "dep:bzip2", "dep:zstd", "dep:xz2", "dep:lz4"]
-all-encryption = ["dep:adiantum", "dep:threefish", "dep:xts-mode", "dep:hctr2"]
+compress-deflate = ["dep:flate2"]
+compress-bzip = ["dep:bzip2"]
+compress-zstd = ["dep:zstd"]
+compress-lzma = ["dep:xz2"]
+compress-lz4 = ["dep:lz4"]
+all-encryption = ["encrypt-adiantum", "encrypt-threefish", "encrypt-xts"]
+encrypt-adiantum = ["dep:adiantum"]
+encrypt-threefish = ["dep:threefish"]
+encrypt-xts = ["dep:xts-mode"]
+encrypt-hctr2 = ["dep:hctr2"] # not working yet
+all-checksums = [
+    "checksum-sha3",
+    "checksum-k12",
+    "checksum-blake3",
+    "checksum-xxhash3",
+    "checksum-seahash",
+    "checksum-cityhash",
+]
+checksum-sha3 = ["dep:tiny-keccak"]
+checksum-k12 = ["dep:tiny-keccak"]
+checksum-blake3 = ["dep:blake3"]
+checksum-xxhash3 = ["dep:twox-hash"]
+checksum-seahash = ["dep:seahash"]
+checksum-cityhash = ["dep:cityhash-rs"]
 
 [dependencies]
 blake3 = { version = "1.7", optional = true }

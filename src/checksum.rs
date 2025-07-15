@@ -40,6 +40,7 @@ impl Deser for ChecksumHeader {
 }
 
 #[derive(Clone, Debug)]
+#[expect(clippy::large_enum_variant)]
 pub enum Checksum {
     SHA3(SHA3),
     K12(K12),
@@ -98,8 +99,7 @@ impl Deser for Checksum {
 
 ///=============================================================================
 /// Checksummer trait for uniform interface
-///=============================================================================
-
+//=============================================================================
 pub(crate) trait Checksummer: 'static + Send {
     fn update(&mut self, data: &[u8]);
     fn finalize(&mut self);
@@ -110,7 +110,7 @@ pub(crate) trait Checksummer: 'static + Send {
 ///=============================================================================
 
 #[derive(Clone)]
-pub(crate) struct SHA3 {
+pub struct SHA3 {
     state: Option<tiny_keccak::Sha3>,
     digest: [u8; 32],
 }
@@ -145,7 +145,7 @@ impl Deser for SHA3 {
     fn deser(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 32 {
-            throw!(Error::Deser(format!("Invalid SHA3 digest size: {}", size)));
+            throw!(Error::Deser(format!("Invalid SHA3 digest size: {size}")));
         }
         let mut s = Self::default();
         r.read_exact(&mut s.digest)?;
@@ -171,21 +171,11 @@ impl Checksummer for SHA3 {
 /// K12 Implementation (simplified to avoid complex API)
 ///=============================================================================
 
-#[derive(Clone, Debug)]
-pub(crate) struct K12 {
+#[derive(Clone, Debug, Default)]
+pub struct K12 {
     buffer: Vec<u8>,
     primer: String,
     digest: [u8; 32],
-}
-
-impl Default for K12 {
-    fn default() -> Self {
-        Self {
-            buffer: Vec::new(),
-            primer: String::new(),
-            digest: [0u8; 32],
-        }
-    }
 }
 
 impl Ser for K12 {
@@ -242,7 +232,7 @@ impl Checksummer for K12 {
 ///=============================================================================
 
 #[derive(Clone)]
-pub(crate) struct BLAKE3 {
+pub struct BLAKE3 {
     state: Option<blake3::Hasher>,
     digest: [u8; 32],
 }
@@ -277,10 +267,7 @@ impl Deser for BLAKE3 {
     fn deser(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 32 {
-            throw!(Error::Deser(format!(
-                "Invalid BLAKE3 digest size: {}",
-                size
-            )));
+            throw!(Error::Deser(format!("Invalid BLAKE3 digest size: {size}")));
         }
         let mut s = Self::default();
         r.read_exact(&mut s.digest)?;
@@ -308,7 +295,7 @@ impl Checksummer for BLAKE3 {
 ///=============================================================================
 
 #[derive(Clone)]
-pub(crate) struct Xxhash3 {
+pub struct Xxhash3 {
     state: Option<twox_hash::XxHash3_128>,
     digest: [u8; 16],
 }
@@ -343,10 +330,7 @@ impl Deser for Xxhash3 {
     fn deser(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 16 {
-            throw!(Error::Deser(format!(
-                "Invalid Xxhash3 digest size: {}",
-                size
-            )));
+            throw!(Error::Deser(format!("Invalid Xxhash3 digest size: {size}")));
         }
         let mut s = Self::default();
         r.read_exact(&mut s.digest)?;
@@ -374,7 +358,7 @@ impl Checksummer for Xxhash3 {
 ///=============================================================================
 
 #[derive(Default, Clone)]
-pub(crate) struct SeaHashWrapper {
+pub struct SeaHashWrapper {
     state: seahash::SeaHasher,
     digest: [u8; 8],
 }
@@ -400,10 +384,9 @@ impl Deser for SeaHashWrapper {
     fn deser(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 8 {
-            throw!(Error::Deser(format!(
-                "Invalid SeaHash digest size: {}",
-                size
-            )));
+            throw!(Error::Deser(
+                format!("Invalid SeaHash digest size: {size}",)
+            ));
         }
         let mut s = Self::default();
         r.read_exact(&mut s.digest)?;
@@ -427,7 +410,7 @@ impl Checksummer for SeaHashWrapper {
 ///=============================================================================
 
 #[derive(Default, Debug, Clone)]
-pub(crate) struct CityHashWrapper {
+pub struct CityHashWrapper {
     buffer: Vec<u8>,
     digest: [u8; 16],
 }
@@ -446,8 +429,7 @@ impl Deser for CityHashWrapper {
         let size = leb128::read::unsigned(r)?;
         if size != 16 {
             throw!(Error::Deser(format!(
-                "Invalid CityHash digest size: {}",
-                size
+                "Invalid CityHash digest size: {size}",
             )));
         }
         let mut s = Self::default();
@@ -477,7 +459,6 @@ impl Checksummer for CityHashWrapper {
 ///=============================================================================
 /// ChecksummingRead wrapper
 ///=============================================================================
-
 pub(crate) struct ChecksummingRead<R: Read> {
     reader: R,
     checksummers: Vec<Box<dyn Checksummer>>,
@@ -518,15 +499,16 @@ impl<R: Read> Read for ChecksummingRead<R> {
 ///=============================================================================
 /// Checksum creation helpers
 ///=============================================================================
-
 impl Checksum {
     pub fn new_sha3() -> Self {
         Checksum::SHA3(SHA3::default())
     }
 
     pub fn new_k12(primer: String) -> Self {
-        let mut k12 = K12::default();
-        k12.primer = primer;
+        let k12 = K12 {
+            primer,
+            ..Default::default()
+        };
         Checksum::K12(k12)
     }
 

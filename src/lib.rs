@@ -1,4 +1,5 @@
 #![feature(default_field_values)]
+#![allow(dead_code)]
 
 use {
     crate::{checksum::*, compress::*, encrypt::*, io::Deser},
@@ -18,7 +19,11 @@ mod compress;
 mod encrypt;
 mod io;
 
-pub use {checksum::Checksum, compress::CompressionAlgorithm, encrypt::EncryptionAlgorithm};
+pub use {
+    checksum::Checksum,
+    compress::{CompressionAlgorithm, pick_best_compression},
+    encrypt::EncryptionAlgorithm,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -135,7 +140,7 @@ impl<'a> Entry<'a> {
 
     /// Extracts the entry to the specified path
     #[throws(Error)]
-    pub fn extract_to(&self, path: &Path) {
+    pub fn extract_to(&self, _path: &Path) {
         // Implementation would open the source file,
         // decrypt and decompress the data while verifying checksums,
         // and write it to the output path
@@ -284,7 +289,7 @@ impl REPAK {
     /// It is posible to request checksumming, compression, and encryption
     /// (in this order).
     #[throws]
-    pub fn append(&mut self, id: String, file: &Path, options: AppendOptions) {
+    pub fn append(&mut self, id: String, file: &Path, _options: AppendOptions) {
         if self.index.entries.contains_key(&id) {
             throw!(Error::AlreadyExists(id));
         }
@@ -328,9 +333,9 @@ impl REPAK {
             let infile = BufReader::new(File::open(entry.path.clone())?);
 
             // Set up checksumming if needed
-            let mut checksummer = match &entry.checksum {
+            let checksummer = match &entry.checksum {
                 None => ChecksummingRead::new(infile, vec![]),
-                Some(ch) => {
+                Some(_ch) => {
                     // Convert Checksum enum instances to boxed Checksummer trait objects
                     // This would need proper implementation based on how Checksum works
                     let checksummers: Vec<Box<dyn Checksummer>> = vec![];
@@ -345,16 +350,9 @@ impl REPAK {
                     algorithm: CompressionAlgorithm::Deflate,
                     ..
                 }) => {
-                    #[cfg(feature = "flate2")]
-                    {
-                        // Create a BufReader wrapper since Compressor expects BufRead
-                        let buf_reader = BufReader::new(checksummer);
-                        Box::new(Compressor::deflate(buf_reader))
-                    }
-                    #[cfg(not(feature = "flate2"))]
-                    {
-                        Box::new(checksummer)
-                    }
+                    // Create a BufReader wrapper since Compressor expects BufRead
+                    let buf_reader = BufReader::new(checksummer);
+                    Box::new(Compressor::deflate(buf_reader))
                 }
                 _ => Box::new(checksummer),
             };
@@ -413,7 +411,7 @@ impl REPAK {
 
         let buf = make_index_locator(offset)?;
 
-        pakfile.write(&buf)?;
+        pakfile.write_all(&buf)?;
     }
 
     // Advanced api: extract payload, skip decryption, decompression, checksum verification.

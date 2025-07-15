@@ -1,7 +1,7 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser, leb128_usize},
+        io::{Deser, Ser},
     },
     culpa::{throw, throws},
     std::io::{Read, Write},
@@ -32,6 +32,7 @@ impl Deser for EncryptionHeader {
         let payload = match algorithm {
             EncryptionAlgorithm::None => vec![],
             EncryptionAlgorithm::Xor => vec![],
+            _ => todo!(),
         };
         Self {
             size,
@@ -45,6 +46,10 @@ impl Deser for EncryptionHeader {
 pub enum EncryptionAlgorithm {
     None,
     Xor,
+    AesXts256,
+    Hctr2,
+    Adiantum,
+    Threefish1024,
 }
 
 impl From<EncryptionAlgorithm> for u64 {
@@ -52,6 +57,7 @@ impl From<EncryptionAlgorithm> for u64 {
         match value {
             EncryptionAlgorithm::None => 0,
             EncryptionAlgorithm::Xor => 1,
+            _ => todo!(),
         }
     }
 }
@@ -82,7 +88,7 @@ impl<R: std::io::BufRead> Encryptor<R> {
         Self::None(r)
     }
 
-    pub fn xor(r: R, key: u8) -> Self {
+    pub fn xor(_r: R, key: u8) -> Self {
         Self::Xor(key)
     }
 }
