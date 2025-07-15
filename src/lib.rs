@@ -329,7 +329,7 @@ impl REPAK {
 
         // write the rest
         for entry in sorted {
-            println!("Sorted Entry: {:?}", entry);
+            println!("Sorted Entry: {entry:?}");
             let infile = BufReader::new(File::open(entry.path.clone())?);
 
             // Set up checksumming if needed
@@ -536,7 +536,7 @@ impl Ser for IndexHeader {
         w.write_u16::<LittleEndian>(0u16)?;
         leb128::write::unsigned(w, self.entries.len() as u64)?;
         for entry in &mut self.entries.values() {
-            println!("Entry: {:?}", entry);
+            println!("Entry: {entry:?}");
             entry.ser(w)?;
         }
         self.checksum.ser(w)?;
@@ -563,8 +563,7 @@ impl Deser for IndexHeader {
         let version = r.read_u8()?;
         if version != 1 {
             throw!(Error::Deser(format!(
-                "Unsupported REPAK version 0x{:2x}",
-                version
+                "Unsupported REPAK version 0x{version:2x}"
             )));
         }
         let reserved = r.read_u16::<LittleEndian>()?;

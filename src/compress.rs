@@ -274,7 +274,7 @@ pub fn pick_best_compression(file: &Path) -> (CompressionAlgorithm, File) {
         }
 
         // Create output path in temp directory
-        let file_name = format!("{:?}.tmp", algorithm);
+        let file_name = format!("{algorithm:?}.tmp");
         let output_path = temp_dir.path().join(file_name);
 
         // Only try to compress if the algorithm is available

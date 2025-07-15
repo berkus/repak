@@ -128,10 +128,7 @@ pub(crate) trait Checksummer: 'static + Send {
     fn finalize(&mut self);
 }
 
-///=============================================================================
 /// SHA3 Implementation
-///=============================================================================
-
 #[cfg(feature = "checksum-sha3")]
 #[derive(Clone)]
 pub struct SHA3 {
@@ -191,10 +188,7 @@ impl Checksummer for SHA3 {
     }
 }
 
-///=============================================================================
 /// K12 Implementation (simplified to avoid complex API)
-///=============================================================================
-
 #[cfg(feature = "checksum-k12")]
 #[derive(Clone, Debug, Default)]
 pub struct K12 {
@@ -255,14 +249,11 @@ impl Checksummer for K12 {
     }
 }
 
-///=============================================================================
 /// BLAKE3 Implementation
-///=============================================================================
-
 #[cfg(feature = "checksum-blake3")]
 #[derive(Clone)]
 pub struct BLAKE3 {
-    state: Option<blake3::Hasher>,
+    state: Option<Box<blake3::Hasher>>,
     digest: [u8; 32],
 }
 
@@ -277,7 +268,7 @@ impl std::fmt::Debug for BLAKE3 {
 impl Default for BLAKE3 {
     fn default() -> Self {
         Self {
-            state: Some(blake3::Hasher::new()),
+            state: Some(Box::new(blake3::Hasher::new())),
             digest: [0u8; 32],
         }
     }
@@ -319,10 +310,7 @@ impl Checksummer for BLAKE3 {
     }
 }
 
-///=============================================================================
 /// Xxhash3 Implementation (uses std::hash::Hasher interface)
-///=============================================================================
-
 #[cfg(feature = "checksum-xxhash3")]
 #[derive(Clone)]
 pub struct Xxhash3 {
@@ -364,10 +352,7 @@ impl Deser for Xxhash3 {
     fn deser(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 16 {
-            throw!(Error::Deser(format!(
-                "Invalid Xxhash3 digest size: {}",
-                size
-            )));
+            throw!(Error::Deser(format!("Invalid Xxhash3 digest size: {size}")));
         }
         let mut s = Self::default();
         r.read_exact(&mut s.digest)?;
@@ -391,10 +376,7 @@ impl Checksummer for Xxhash3 {
     }
 }
 
-///=============================================================================
 /// SeaHash Implementation (uses std::hash::Hasher interface)
-///=============================================================================
-
 #[cfg(feature = "checksum-seahash")]
 #[derive(Default, Clone)]
 pub struct SeaHashWrapper {
@@ -426,10 +408,7 @@ impl Deser for SeaHashWrapper {
     fn deser(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 8 {
-            throw!(Error::Deser(format!(
-                "Invalid SeaHash digest size: {}",
-                size
-            )));
+            throw!(Error::Deser(format!("Invalid SeaHash digest size: {size}")));
         }
         let mut s = Self::default();
         r.read_exact(&mut s.digest)?;
@@ -449,10 +428,7 @@ impl Checksummer for SeaHashWrapper {
     }
 }
 
-///=============================================================================
 /// CityHash Implementation (wrapper for function-based API)
-///=============================================================================
-
 #[cfg(feature = "checksum-cityhash")]
 #[derive(Default, Debug, Clone)]
 pub struct CityHashWrapper {
@@ -476,8 +452,7 @@ impl Deser for CityHashWrapper {
         let size = leb128::read::unsigned(r)?;
         if size != 16 {
             throw!(Error::Deser(format!(
-                "Invalid CityHash digest size: {}",
-                size
+                "Invalid CityHash digest size: {size}"
             )));
         }
         let mut s = Self::default();
@@ -556,8 +531,10 @@ impl Checksum {
 
     #[cfg(feature = "checksum-k12")]
     pub fn new_k12(primer: String) -> Self {
-        let mut k12 = K12::default();
-        k12.primer = primer;
+        let k12 = K12 {
+            primer,
+            ..Default::default()
+        };
         Checksum::K12(k12)
     }
 
@@ -715,13 +692,12 @@ mod tests {
         let test_data = b"hello world";
         let reader = Cursor::new(test_data);
 
-        let mut checksummers: Vec<Box<dyn Checksummer>> = vec![];
-
-        #[cfg(feature = "checksum-sha3")]
-        checksummers.push(Box::new(SHA3::default()));
-
-        #[cfg(feature = "checksum-blake3")]
-        checksummers.push(Box::new(BLAKE3::default()));
+        let checksummers: Vec<Box<dyn Checksummer>> = vec![
+            #[cfg(feature = "checksum-sha3")]
+            Box::new(SHA3::default()),
+            #[cfg(feature = "checksum-blake3")]
+            Box::new(BLAKE3::default()),
+        ];
 
         let mut checksumming_reader = ChecksummingRead::new(reader, checksummers);
 
@@ -734,16 +710,15 @@ mod tests {
 
         let checksummers = checksumming_reader.get_checksummers();
 
-        let expected_len =
-            0 + if cfg!(feature = "checksum-sha3") {
-                1
-            } else {
-                0
-            } + if cfg!(feature = "checksum-blake3") {
-                1
-            } else {
-                0
-            };
+        let expected_len = if cfg!(feature = "checksum-sha3") {
+            1
+        } else {
+            0
+        } + if cfg!(feature = "checksum-blake3") {
+            1
+        } else {
+            0
+        };
 
         assert_eq!(checksummers.len(), expected_len);
     }

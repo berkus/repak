@@ -23,8 +23,8 @@ pub fn leb128_usize(val: u64) -> usize {
 
 #[throws(Error)]
 pub(crate) fn ser_string(w: &mut impl Write, str: &str) {
-    leb128::write::unsigned(w, str.as_bytes().len() as u64)?;
-    w.write_all(&str.as_bytes())?;
+    leb128::write::unsigned(w, str.len() as u64)?;
+    w.write_all(str.as_bytes())?;
 }
 
 #[throws(Error)]

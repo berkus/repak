@@ -71,8 +71,7 @@ impl TryFrom<u64> for EncryptionAlgorithm {
             0 => Self::None,
             1 => Self::Xor,
             _ => throw!(Error::Deser(format!(
-                "Unknown encryption algorithm: {}",
-                value
+                "Unknown encryption algorithm: {value}"
             ))),
         }
     }
