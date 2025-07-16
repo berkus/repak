@@ -1,0 +1,3 @@
+- DO NOT write unin tests, unless explicitly asked to.
+- DO NOT explain every step.
+- DO NOT provide summary of the changes.
