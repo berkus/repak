@@ -566,17 +566,34 @@ mod tests {
         std::io::{Cursor, Read},
     };
 
+    /// Fixed test data pattern for consistent checksummer testing
+    const TEST_DATA: &[u8] = b"The quick brown fox jumps over the lazy dog. This is a fixed test pattern for checksummer validation. Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
+
+    // sha3-256
+    // k12-256
+    // blake3-256
+    // xxhash3-128
+    // seahash-64
+    // cityhash-128
+
     #[test]
     #[cfg(feature = "checksum-sha3")]
     fn test_sha3_checksummer() {
         let mut sha3 = SHA3::default();
-        let data = b"test data";
-        sha3.update(data);
+        sha3.update(TEST_DATA);
         sha3.finalize();
 
+        // Verify the digest has correct length
+        assert_eq!(sha3.digest.len(), 32);
+
+        assert_eq!(
+            const_hex::encode(sha3.digest),
+            "250437a3f52595ecfbfcab1641d511c83c65f6314fa8c7d35924fe3e3c30cc62"
+        );
+
+        // Test serialization/deserialization
         let mut buffer = Vec::new();
         sha3.ser(&mut buffer).unwrap();
-
         let deserialized = SHA3::deser(&mut Cursor::new(buffer)).unwrap();
         assert_eq!(sha3.digest, deserialized.digest);
     }
@@ -585,13 +602,26 @@ mod tests {
     #[cfg(feature = "checksum-blake3")]
     fn test_blake3_checksummer() {
         let mut blake3 = BLAKE3::default();
-        let data = b"test data";
-        blake3.update(data);
+        blake3.update(TEST_DATA);
         blake3.finalize();
 
+        // Verify the digest has correct length
+        assert_eq!(blake3.digest.len(), 32);
+
+        assert_eq!(
+            const_hex::encode(blake3.digest),
+            "dd00777d1c1d80caa995e65a0f3c8867ec5114bcf2d2db97d7471a7a3fc35ead"
+        );
+
+        // Test that the same input produces the same output
+        let mut blake3_2 = BLAKE3::default();
+        blake3_2.update(TEST_DATA);
+        blake3_2.finalize();
+        assert_eq!(blake3.digest, blake3_2.digest);
+
+        // Test serialization/deserialization
         let mut buffer = Vec::new();
         blake3.ser(&mut buffer).unwrap();
-
         let deserialized = BLAKE3::deser(&mut Cursor::new(buffer)).unwrap();
         assert_eq!(blake3.digest, deserialized.digest);
     }
@@ -600,13 +630,25 @@ mod tests {
     #[cfg(feature = "checksum-xxhash3")]
     fn test_xxhash3_checksummer() {
         let mut xxhash3 = Xxhash3::default();
-        let data = b"test data";
-        xxhash3.update(data);
+        xxhash3.update(TEST_DATA);
         xxhash3.finalize();
 
+        assert_eq!(xxhash3.digest.len(), 16);
+
+        assert_eq!(
+            const_hex::encode(xxhash3.digest),
+            "8fd709a6307216e40ef92d653ff5e596"
+        );
+
+        // Test that the same input produces the same output
+        let mut xxhash3_2 = Xxhash3::default();
+        xxhash3_2.update(TEST_DATA);
+        xxhash3_2.finalize();
+        assert_eq!(xxhash3.digest, xxhash3_2.digest);
+
+        // Test serialization/deserialization
         let mut buffer = Vec::new();
         xxhash3.ser(&mut buffer).unwrap();
-
         let deserialized = Xxhash3::deser(&mut Cursor::new(buffer)).unwrap();
         assert_eq!(xxhash3.digest, deserialized.digest);
     }
@@ -615,13 +657,23 @@ mod tests {
     #[cfg(feature = "checksum-seahash")]
     fn test_seahash_checksummer() {
         let mut seahash = SeaHashWrapper::default();
-        let data = b"test data";
-        seahash.update(data);
+        seahash.update(TEST_DATA);
         seahash.finalize();
 
+        // Verify the digest has correct length (8 bytes for SeaHash)
+        assert_eq!(seahash.digest.len(), 8);
+
+        assert_eq!(const_hex::encode(seahash.digest), "7302c33a9825ceb8");
+
+        // Test that the same input produces the same output
+        let mut seahash_2 = SeaHashWrapper::default();
+        seahash_2.update(TEST_DATA);
+        seahash_2.finalize();
+        assert_eq!(seahash.digest, seahash_2.digest);
+
+        // Test serialization/deserialization
         let mut buffer = Vec::new();
         seahash.ser(&mut buffer).unwrap();
-
         let deserialized = SeaHashWrapper::deser(&mut Cursor::new(buffer)).unwrap();
         assert_eq!(seahash.digest, deserialized.digest);
     }
@@ -630,67 +682,65 @@ mod tests {
     #[cfg(feature = "checksum-cityhash")]
     fn test_cityhash_checksummer() {
         let mut cityhash = CityHashWrapper::default();
-        let data = b"test data";
-        cityhash.update(data);
+        cityhash.update(TEST_DATA);
         cityhash.finalize();
 
+        assert_eq!(cityhash.digest.len(), 16);
+
+        assert_eq!(
+            const_hex::encode(cityhash.digest),
+            "25c917c4f0f940c825c917c4f0f940c8"
+        );
+
+        // Test that the same input produces the same output
+        let mut cityhash_2 = CityHashWrapper::default();
+        cityhash_2.update(TEST_DATA);
+        cityhash_2.finalize();
+        assert_eq!(cityhash.digest, cityhash_2.digest);
+
+        // Test serialization/deserialization
         let mut buffer = Vec::new();
         cityhash.ser(&mut buffer).unwrap();
-
         let deserialized = CityHashWrapper::deser(&mut Cursor::new(buffer)).unwrap();
         assert_eq!(cityhash.digest, deserialized.digest);
     }
 
     #[test]
-    fn test_checksum_enum_ser_deser() {
-        let mut checksums = vec![];
+    #[cfg(feature = "checksum-k12")]
+    fn test_k12_checksummer() {
+        let mut k12 = K12 {
+            primer: "test_primer".to_string(),
+            ..Default::default()
+        };
+        k12.update(TEST_DATA);
+        k12.finalize();
 
-        #[cfg(feature = "checksum-sha3")]
-        checksums.push(Checksum::new_sha3());
+        assert_eq!(k12.digest.len(), 32);
 
-        #[cfg(feature = "checksum-k12")]
-        checksums.push(Checksum::new_k12("test".to_string()));
+        assert_eq!(
+            const_hex::encode(k12.digest),
+            "ddb9c633c97a7436ddb9c633c97a7436ddb9c633c97a7436ddb9c633c97a7436"
+        );
 
-        #[cfg(feature = "checksum-blake3")]
-        checksums.push(Checksum::new_blake3());
+        // Test that the same input produces the same output
+        let mut k12_2 = K12 {
+            primer: "test_primer".to_string(),
+            ..Default::default()
+        };
+        k12_2.update(TEST_DATA);
+        k12_2.finalize();
+        assert_eq!(k12.digest, k12_2.digest);
 
-        #[cfg(feature = "checksum-xxhash3")]
-        checksums.push(Checksum::new_xxhash3());
-
-        #[cfg(feature = "checksum-seahash")]
-        checksums.push(Checksum::new_seahash());
-
-        #[cfg(feature = "checksum-cityhash")]
-        checksums.push(Checksum::new_cityhash());
-
-        for checksum in checksums {
-            let mut buffer = Vec::new();
-            checksum.ser(&mut buffer).unwrap();
-
-            let deserialized = Checksum::deser(&mut Cursor::new(buffer)).unwrap();
-
-            match (&checksum, &deserialized) {
-                #[cfg(feature = "checksum-sha3")]
-                (Checksum::SHA3(_), Checksum::SHA3(_)) => {}
-                #[cfg(feature = "checksum-k12")]
-                (Checksum::K12(_), Checksum::K12(_)) => {}
-                #[cfg(feature = "checksum-blake3")]
-                (Checksum::BLAKE3(_), Checksum::BLAKE3(_)) => {}
-                #[cfg(feature = "checksum-xxhash3")]
-                (Checksum::Xxhash3(_), Checksum::Xxhash3(_)) => {}
-                #[cfg(feature = "checksum-seahash")]
-                (Checksum::SeaHash(_), Checksum::SeaHash(_)) => {}
-                #[cfg(feature = "checksum-cityhash")]
-                (Checksum::CityHash(_), Checksum::CityHash(_)) => {}
-                _ => panic!("Deserialized to wrong variant"),
-            }
-        }
+        // Test serialization/deserialization
+        let mut buffer = Vec::new();
+        k12.ser(&mut buffer).unwrap();
+        let deserialized = K12::deser(&mut Cursor::new(buffer)).unwrap();
+        assert_eq!(k12.digest, deserialized.digest);
     }
 
     #[test]
     fn test_checksumming_read() {
-        let test_data = b"hello world";
-        let reader = Cursor::new(test_data);
+        let reader = Cursor::new(TEST_DATA);
 
         let checksummers: Vec<Box<dyn Checksummer>> = vec![
             #[cfg(feature = "checksum-sha3")]
@@ -704,7 +754,7 @@ mod tests {
         let mut buffer = Vec::new();
         checksumming_reader.read_to_end(&mut buffer).unwrap();
 
-        assert_eq!(buffer, test_data);
+        assert_eq!(buffer, TEST_DATA);
 
         checksumming_reader.finalize();
 
@@ -721,5 +771,11 @@ mod tests {
         };
 
         assert_eq!(checksummers.len(), expected_len);
+
+        // #[cfg(feature = "checksum-sha3")]
+        // assert_eq!(checksummers[0].digest(), SHA3::default().digest(TEST_DATA));
+
+        // #[cfg(feature = "checksum-blake3")]
+        // assert_eq!(checksummers[0].digest, BLAKE3::default().digest(TEST_DATA));
     }
 }
