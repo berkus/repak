@@ -1,11 +1,12 @@
 use {
     crate::{
         Error,
+        counting_writer::CountingWriter,
         io::{Deser, Ser, leb128_usize},
     },
     culpa::{throw, throws},
     std::{
-        io::{BufRead, BufReader, Cursor, Read, Write},
+        io::{BufRead, BufReader, Read, Write},
         path::Path,
     },
 };
@@ -353,7 +354,7 @@ pub(crate) fn compress_data<R: Read, W: Write>(
     original_size: u64,
 ) -> (CompressionHeader, W) {
     if matches!(algorithm, CompressionAlgorithm::Best) {
-        throw!(Error::Deser(
+        throw!(Error::UnsupportedCompression(
             "Best algorithm cannot be used with compress_data. Use pick_best_compression first."
                 .to_string()
         ));
@@ -367,52 +368,6 @@ pub(crate) fn compress_data<R: Read, W: Write>(
     let final_writer = compressor.finish()?;
 
     (header, final_writer)
-}
-
-/// Compress from reader to writer using the best available algorithm
-#[throws(Error)]
-pub fn compress_stream_best<R: Read, W: Write>(reader: R, writer: W) -> (CompressionHeader, W) {
-    // For streaming best compression, we need to read all data first
-    // to determine the best algorithm
-    let mut data = Vec::new();
-    let mut reader = reader;
-    reader.read_to_end(&mut data)?;
-
-    // Find the best algorithm by testing compression
-    let best_algorithm = {
-        let algorithms = [
-            CompressionAlgorithm::None,
-            CompressionAlgorithm::Deflate,
-            CompressionAlgorithm::Bzip,
-            CompressionAlgorithm::Zstd,
-            CompressionAlgorithm::Lzma,
-            CompressionAlgorithm::Lz4,
-        ];
-
-        let mut best_algorithm = CompressionAlgorithm::None;
-        let mut best_size = data.len() as u64;
-
-        for algorithm in algorithms {
-            // Test compression with counting writer to avoid storing compressed data
-            let data_cursor = Cursor::new(&data);
-            let counting_writer = CountingWriter::new();
-
-            if let Ok((_header, final_writer)) =
-                compress_data(data_cursor, counting_writer, algorithm, data.len() as u64)
-            {
-                let compressed_size = final_writer.count();
-                if compressed_size < best_size {
-                    best_size = compressed_size;
-                    best_algorithm = algorithm;
-                }
-            }
-        }
-        best_algorithm
-    };
-
-    // Now compress with the chosen algorithm using streaming
-    let cursor = Cursor::new(&data);
-    compress_stream(cursor, writer, best_algorithm, data.len() as u64)?
 }
 
 /// Decompress data from reader using the compression header
@@ -505,32 +460,6 @@ pub fn pick_best_compression(file: &Path) -> CompressionAlgorithm {
     }
 
     best_algorithm
-}
-
-/// A writer that counts bytes written without storing them
-struct CountingWriter {
-    count: u64,
-}
-
-impl CountingWriter {
-    fn new() -> Self {
-        Self { count: 0 }
-    }
-
-    fn count(&self) -> u64 {
-        self.count
-    }
-}
-
-impl Write for CountingWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.count += buf.len() as u64;
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 /// Decompress data using the given compression header

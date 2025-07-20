@@ -21,6 +21,7 @@ use {
 
 mod checksum;
 mod compress;
+pub(crate) mod counting_writer;
 mod encrypt;
 mod io;
 
