@@ -26,16 +26,17 @@ impl EncryptionHeader {
 }
 
 impl Ser for EncryptionHeader {
-    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+    #[throws(Error)]
+    fn ser(&self, w: &mut impl Write) {
         leb128::write::unsigned(w, self.algorithm.into())?;
         leb128::write::unsigned(w, self.payload.len() as u64)?;
         w.write_all(&self.payload)?;
-        Ok(())
     }
 }
 
 impl Deser for EncryptionHeader {
-    fn deser(r: &mut impl Read) -> Result<Self, Error> {
+    #[throws(Error)]
+    fn deser(r: &mut impl Read) -> Self {
         let algorithm = EncryptionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
         let size = leb128::read::unsigned(r)?;
         let payload = match algorithm {
@@ -43,11 +44,11 @@ impl Deser for EncryptionHeader {
             EncryptionAlgorithm::Xor => vec![],
             _ => todo!(),
         };
-        Ok(Self {
+        Self {
             size,
             algorithm,
             payload,
-        })
+        }
     }
 }
 
@@ -74,11 +75,12 @@ impl From<EncryptionAlgorithm> for u64 {
 impl TryFrom<u64> for EncryptionAlgorithm {
     type Error = Error;
 
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
+    #[throws(Self::Error)]
+    fn try_from(value: u64) -> Self {
         match value {
-            0 => Ok(Self::None),
-            1 => Ok(Self::Xor),
-            _ => Err(Error::Deser(format!(
+            0 => Self::None,
+            1 => Self::Xor,
+            _ => throw!(Error::Deser(format!(
                 "Unknown encryption algorithm: {value}"
             ))),
         }

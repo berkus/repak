@@ -334,7 +334,7 @@ impl REPAK {
         };
 
         // Create encryption header if encryption is specified
-        let encryption_header = options.encryption.map(|alg| EncryptionHeader::new(alg));
+        let encryption_header = options.encryption.map(EncryptionHeader::new);
 
         let entry = IndexEntry {
             offset: self.last_insertion_offset,
