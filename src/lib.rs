@@ -360,6 +360,7 @@ impl REPAK {
 
         // Open source file for reading
         let source_file = File::open(file)?;
+        let original_size = source_file.metadata()?.len();
         let mut source_reader = BufReader::new(source_file);
 
         let (compression_header, final_size) = if let Some(compression_alg) = options.compression {
@@ -372,7 +373,12 @@ impl REPAK {
 
             // Apply compression using streaming
 
-            let (header, _) = compress_stream(source_reader, &mut archive_file, chosen_algorithm)?;
+            let (header, _) = compress_stream(
+                source_reader,
+                &mut archive_file,
+                chosen_algorithm,
+                original_size,
+            )?;
 
             // Get the current position to calculate compressed size
             let end_pos = archive_file.stream_position()?;

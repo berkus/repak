@@ -5,7 +5,7 @@ use {
     },
     culpa::{throw, throws},
     std::{
-        io::{BufRead, Cursor, Read, Write},
+        io::{BufRead, Read, Write},
         path::Path,
     },
 };
@@ -330,9 +330,10 @@ impl<W: Write> Write for Compressor<W> {
 /// Compress data from reader to writer using streaming compression
 #[throws(Error)]
 pub fn compress_stream<R: Read, W: Write>(
-    mut reader: R,
+    reader: R,
     writer: W,
     algorithm: CompressionAlgorithm,
+    original_size: u64,
 ) -> (CompressionHeader, W) {
     if matches!(algorithm, CompressionAlgorithm::Best) {
         throw!(Error::Deser(
@@ -340,131 +341,56 @@ pub fn compress_stream<R: Read, W: Write>(
         ));
     }
 
-    // Read all data to calculate original size (required for header)
-    let mut data = Vec::new();
-    reader.read_to_end(&mut data)?;
-    let original_size = data.len() as u64;
-
-    let mut compressor = Compressor::new(algorithm, writer)?;
-    compressor.write_all(&data)?;
-    let final_writer = compressor.finish()?;
-
-    let header = CompressionHeader::new(algorithm, original_size);
-    (header, final_writer)
+    compress_data(reader, writer, algorithm, original_size)?
 }
 
-/// Compresses data and returns compressed bytes along with compression header
+/// Helper function for in-memory compression used by best compression algorithms
 #[throws(Error)]
-pub(crate) fn compress_data(
+pub(crate) fn compress_data_in_memory(
     data: &[u8],
     algorithm: CompressionAlgorithm,
 ) -> (CompressionHeader, Vec<u8>) {
-    let original_size = data.len() as u64;
-
-    // Handle Best algorithm by trying all algorithms and picking the smallest
     if matches!(algorithm, CompressionAlgorithm::Best) {
-        let algorithms = [
-            CompressionAlgorithm::None,
-            CompressionAlgorithm::Deflate,
-            CompressionAlgorithm::Bzip,
-            CompressionAlgorithm::Zstd,
-            CompressionAlgorithm::Lzma,
-            CompressionAlgorithm::Lz4,
-        ];
+        throw!(Error::Deser(
+            "Best algorithm cannot be used with compress_data_in_memory. Use pick_best_compression first."
+                .to_string()
+        ));
+    }
 
-        let mut best_algorithm = CompressionAlgorithm::None;
-        let mut best_size = data.len();
-        let mut best_data = data.to_vec();
+    let original_size = data.len() as u64;
+    let header = CompressionHeader::new(algorithm, original_size);
 
-        for alg in algorithms {
-            if let Ok((_, compressed)) = compress_data(data, alg)
-                && compressed.len() < best_size
-            {
-                best_size = compressed.len();
-                best_algorithm = alg;
-                best_data = compressed;
-            }
-        }
+    // Use streaming compression via Compressor with Vec<u8> as writer
+    let mut compressor = Compressor::new(algorithm, Vec::new())?;
+    compressor.write_all(data)?;
+    let compressed = compressor.finish()?;
 
-        let header = CompressionHeader::new(best_algorithm, original_size);
-        return (header, best_data);
+    (header, compressed)
+}
+
+/// Compresses data from reader to writer using streaming compression
+#[throws(Error)]
+pub(crate) fn compress_data<R: Read, W: Write>(
+    mut reader: R,
+    writer: W,
+    algorithm: CompressionAlgorithm,
+    original_size: u64,
+) -> (CompressionHeader, W) {
+    if matches!(algorithm, CompressionAlgorithm::Best) {
+        throw!(Error::Deser(
+            "Best algorithm cannot be used with compress_data. Use pick_best_compression first."
+                .to_string()
+        ));
     }
 
     let header = CompressionHeader::new(algorithm, original_size);
 
-    let compressed = match algorithm {
-        CompressionAlgorithm::None => data.to_vec(),
-        CompressionAlgorithm::Deflate => {
-            #[cfg(feature = "compress-deflate")]
-            {
-                use {
-                    flate2::{Compression, write::DeflateEncoder},
-                    std::io::Write,
-                };
+    // Use streaming compression via Compressor
+    let mut compressor = Compressor::new(algorithm, writer)?;
+    std::io::copy(&mut reader, &mut compressor)?;
+    let final_writer = compressor.finish()?;
 
-                let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
-                encoder.write_all(data)?;
-                encoder.finish()?
-            }
-            #[cfg(not(feature = "compress-deflate"))]
-            throw!(Error::Deser(
-                "Deflate compression not supported".to_string()
-            ))
-        }
-        CompressionAlgorithm::Bzip => {
-            #[cfg(feature = "compress-bzip")]
-            {
-                use {
-                    bzip2::{Compression, write::BzEncoder},
-                    std::io::Write,
-                };
-
-                let mut encoder = BzEncoder::new(Vec::new(), Compression::default());
-                encoder.write_all(data)?;
-                encoder.finish()?
-            }
-            #[cfg(not(feature = "compress-bzip"))]
-            throw!(Error::Deser("Bzip2 compression not supported".to_string()))
-        }
-        CompressionAlgorithm::Zstd => {
-            #[cfg(feature = "compress-zstd")]
-            {
-                zstd::encode_all(data, 0)?
-            }
-            #[cfg(not(feature = "compress-zstd"))]
-            throw!(Error::Deser("Zstd compression not supported".to_string()))
-        }
-        CompressionAlgorithm::Lzma => {
-            #[cfg(feature = "compress-lzma")]
-            {
-                use {std::io::Write, xz2::write::XzEncoder};
-
-                let mut encoder = XzEncoder::new(Vec::new(), 6);
-                encoder.write_all(data)?;
-                encoder.finish()?
-            }
-            #[cfg(not(feature = "compress-lzma"))]
-            throw!(Error::Deser("LZMA compression not supported".to_string()))
-        }
-        CompressionAlgorithm::Lz4 => {
-            #[cfg(feature = "compress-lz4")]
-            {
-                use std::io::Write;
-                let mut encoder = lz4::EncoderBuilder::new().build(Vec::new())?;
-                encoder.write_all(data)?;
-                let (compressed, _) = encoder.finish();
-                compressed
-            }
-            #[cfg(not(feature = "compress-lz4"))]
-            throw!(Error::Deser("LZ4 compression not supported".to_string()))
-        }
-        CompressionAlgorithm::Best => {
-            // This should never be reached due to the early return above
-            unreachable!("Best algorithm should be handled earlier")
-        }
-    };
-
-    (header, compressed)
+    (header, final_writer)
 }
 
 /// Compress from reader to writer using the best available algorithm
@@ -491,7 +417,7 @@ pub fn compress_stream_best<R: Read, W: Write>(reader: R, writer: W) -> (Compres
         let mut best_size = data.len();
 
         for algorithm in algorithms {
-            if let Ok((_header, compressed)) = compress_data(&data, algorithm)
+            if let Ok((_header, compressed)) = compress_data_in_memory(&data, algorithm)
                 && compressed.len() < best_size
             {
                 best_size = compressed.len();
@@ -502,8 +428,8 @@ pub fn compress_stream_best<R: Read, W: Write>(reader: R, writer: W) -> (Compres
     };
 
     // Now compress with the chosen algorithm using streaming
-    let cursor = Cursor::new(data);
-    compress_stream(cursor, writer, best_algorithm)?
+    let cursor = std::io::Cursor::new(&data);
+    compress_stream(cursor, writer, best_algorithm, data.len() as u64)?
 }
 
 /// Decompress data from reader using the compression header
@@ -580,7 +506,7 @@ pub fn pick_best_compression(file: &Path) -> CompressionAlgorithm {
 
     for algorithm in algorithms {
         // Try to compress with this algorithm
-        if let Ok((_header, compressed)) = compress_data(&data, algorithm)
+        if let Ok((_header, compressed)) = compress_data_in_memory(&data, algorithm)
             && compressed.len() < best_size
         {
             best_size = compressed.len();
