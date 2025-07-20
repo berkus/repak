@@ -50,6 +50,8 @@ pub enum Error {
     AlreadyExists(String),
     #[error("Unsupported compression algorithm: {0}")]
     UnsupportedCompression(String),
+    #[error("Unsupported checksum algorithm: {0}")]
+    UnsupportedChecksum(String),
     #[error("Unsupported encryption algorithm: {0}")]
     UnsupportedEncryption(String),
     #[error("Checksum verification failed for {0}")]
@@ -706,7 +708,6 @@ impl Deser for IndexEntry {
             encryption,
             compression,
             checksum,
-            path: PathBuf::new(),
         }
     }
 }
