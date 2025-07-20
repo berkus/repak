@@ -120,19 +120,13 @@ fn main() {
         let entry = repak.lookup(&name).context("Looking up REPAK resource")?;
         if entry.is_none() {
             let compression: CompressionAlgorithm = match &asset.compression {
-                Some(Compression::Best) => {
-                    let (compression, _) = repak::pick_best_compression(&asset.path)?;
-                    compression.algorithm
-                }
+                Some(Compression::Best) => repak::pick_best_compression(&asset.path)?,
                 Some(Compression::Zstd) => CompressionAlgorithm::Zstd,
                 Some(Compression::None) => CompressionAlgorithm::None,
                 None => {
                     // Use global compression option or default
                     match &m.global_options.compression {
-                        Some(Compression::Best) => {
-                            let (compression, _) = repak::pick_best_compression(&asset.path)?;
-                            compression.algorithm
-                        }
+                        Some(Compression::Best) => repak::pick_best_compression(&asset.path)?,
                         Some(Compression::Zstd) => CompressionAlgorithm::Zstd,
                         Some(Compression::None) | None => CompressionAlgorithm::None,
                     }

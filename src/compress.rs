@@ -5,7 +5,7 @@ use {
     },
     culpa::{throw, throws},
     std::{
-        io::{BufRead, Read, Write},
+        io::{BufRead, Cursor, Read, Write},
         path::Path,
     },
 };
@@ -471,45 +471,75 @@ pub(crate) fn compress_data(
 #[throws(Error)]
 pub fn compress_stream_best<R: Read, W: Write>(reader: R, writer: W) -> (CompressionHeader, W) {
     // For streaming best compression, we need to read all data first
-    // to test different algorithms
+    // to determine the best algorithm
     let mut data = Vec::new();
     let mut reader = reader;
     reader.read_to_end(&mut data)?;
 
-    let (header, compressed_data) = compress_data(&data, CompressionAlgorithm::Best)?;
+    // Find the best algorithm by testing compression
+    let best_algorithm = {
+        let algorithms = [
+            CompressionAlgorithm::None,
+            CompressionAlgorithm::Deflate,
+            CompressionAlgorithm::Bzip,
+            CompressionAlgorithm::Zstd,
+            CompressionAlgorithm::Lzma,
+            CompressionAlgorithm::Lz4,
+        ];
 
-    let mut writer = writer;
-    writer.write_all(&compressed_data)?;
+        let mut best_algorithm = CompressionAlgorithm::None;
+        let mut best_size = data.len();
 
-    (header, writer)
+        for algorithm in algorithms {
+            if let Ok((_header, compressed)) = compress_data(&data, algorithm)
+                && compressed.len() < best_size
+            {
+                best_size = compressed.len();
+                best_algorithm = algorithm;
+            }
+        }
+        best_algorithm
+    };
+
+    // Now compress with the chosen algorithm using streaming
+    let cursor = Cursor::new(data);
+    compress_stream(cursor, writer, best_algorithm)?
 }
 
 /// Decompress data from reader using the compression header
+///
+/// Creates a streaming decompressor that can read compressed data from the given reader
+/// and decompress it according to the algorithm specified in the compression header.
+///
+/// # Errors
+/// * `Error::Deser` if the compression algorithm is not supported or not enabled via features
+/// * I/O errors from the underlying reader
 #[throws(Error)]
 pub fn decompress_stream<R: BufRead>(reader: R, header: &CompressionHeader) -> Decompressor<R> {
     Decompressor::new(header.algorithm, reader)?
 }
 
-/// Take a source file, run series of compression algorithms, and return the best compressed result.
+/// Analyze a source file and return the best compression algorithm choice.
 ///
-/// This function compresses the entire input file with each available algorithm and chooses
-/// the one that produces the smallest output. It returns a tuple with the compression header
-/// and the compressed data.
+/// This function tests compression with each available algorithm and chooses
+/// the one that would produce the smallest output. It only returns the algorithm choice,
+/// not the actual compressed data, allowing the streaming pipeline to handle compression.
 ///
-/// - For small files or already compressed formats, returns the original file without compression
+/// - For small files or already compressed formats, returns None (no compression)
 /// - Only tests algorithms that are enabled via features
+/// - It's acceptable to compress the file twice: once for testing, once for actual use
 ///
 /// # Arguments
-/// * `file` - Path to the original file to compress
+/// * `file` - Path to the original file to analyze
 ///
 /// # Returns
-/// * `(CompressionHeader, Vec<u8>)` - The best compression header and compressed data
+/// * `CompressionAlgorithm` - The best compression algorithm choice
 ///
 /// # Errors
 /// * `Error::FileNotFound` if the input file doesn't exist
 /// * I/O errors from file operations
 #[throws(Error)]
-pub fn pick_best_compression(file: &Path) -> (CompressionHeader, Vec<u8>) {
+pub fn pick_best_compression(file: &Path) -> CompressionAlgorithm {
     if !file.exists() {
         throw!(Error::FileNotFound(file.to_owned()));
     }
@@ -520,8 +550,7 @@ pub fn pick_best_compression(file: &Path) -> (CompressionHeader, Vec<u8>) {
 
     // For small files, compression might not be worth it
     if file_size < 1024 {
-        let header = CompressionHeader::new(CompressionAlgorithm::None, file_size as u64);
-        return (header, data);
+        return CompressionAlgorithm::None;
     }
 
     // Check file extension to skip known already-compressed formats
@@ -530,8 +559,7 @@ pub fn pick_best_compression(file: &Path) -> (CompressionHeader, Vec<u8>) {
             // Already compressed formats
             "jpg" | "jpeg" | "png" | "mp3" | "mp4" | "zip" | "gz" | "xz" | "7z" | "rar"
             | "webp" | "webm" | "aac" | "ogg" | "flac" => {
-                let header = CompressionHeader::new(CompressionAlgorithm::None, file_size as u64);
-                return (header, data);
+                return CompressionAlgorithm::None;
             }
             _ => {}
         }
@@ -549,7 +577,6 @@ pub fn pick_best_compression(file: &Path) -> (CompressionHeader, Vec<u8>) {
 
     let mut best_algorithm = CompressionAlgorithm::None;
     let mut best_size = file_size;
-    let mut best_data = data.clone();
 
     for algorithm in algorithms {
         // Try to compress with this algorithm
@@ -558,12 +585,10 @@ pub fn pick_best_compression(file: &Path) -> (CompressionHeader, Vec<u8>) {
         {
             best_size = compressed.len();
             best_algorithm = algorithm;
-            best_data = compressed;
         }
     }
 
-    let header = CompressionHeader::new(best_algorithm, file_size as u64);
-    (header, best_data)
+    best_algorithm
 }
 
 /// Decompress data using the given compression header

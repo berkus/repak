@@ -4,7 +4,7 @@
 use {
     crate::{
         checksum::{ChecksumHeader, Checksummer, ChecksummingRead},
-        compress::{CompressionHeader, compress_stream, compress_stream_best},
+        compress::{CompressionHeader, compress_stream},
         encrypt::EncryptionHeader,
         io::Deser,
     },
@@ -363,12 +363,15 @@ impl REPAK {
         let mut source_reader = BufReader::new(source_file);
 
         let (compression_header, final_size) = if let Some(compression_alg) = options.compression {
-            // Apply compression using streaming
-            let (header, _) = if let CompressionAlgorithm::Best = compression_alg {
-                compress_stream_best(source_reader, &mut archive_file)?
+            // Determine the actual algorithm to use
+            let chosen_algorithm = if let CompressionAlgorithm::Best = compression_alg {
+                pick_best_compression(file)?
             } else {
-                compress_stream(source_reader, &mut archive_file, compression_alg)?
+                compression_alg
             };
+
+            // Apply compression using streaming
+            let (header, _) = compress_stream(source_reader, &mut archive_file, chosen_algorithm)?;
 
             // Get the current position to calculate compressed size
             let end_pos = archive_file.stream_position()?;
