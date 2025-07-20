@@ -204,8 +204,7 @@ impl Checksum {
     #[cfg(feature = "checksum-k12")]
     #[must_use]
     pub fn new_k12(primer: String) -> Self {
-        let k12 = K12::new(primer);
-        Checksum::K12(k12)
+        Checksum::K12(K12::new(primer))
     }
 
     #[cfg(feature = "checksum-blake3")]
