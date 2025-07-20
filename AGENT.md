@@ -6,13 +6,14 @@ Main code is located in `src/` while there is also example code in `examples/rep
 
 ## Build & Commands
 
-Build with `cargo build --all-features` to check all features (there are many individual features).
-Format code with `cargo fmt`.
-Style check with `cargo clippy -- -D clippy::pedantic`
+Build with `just build` to check all features (there are many individual features).
+Run all tests with `just test`. Run individual tests with `cargo test` as you would normally.
+Format code with `just fmt`.
+Style check with `just style`.
 
 ## Code style
 
-Follow the Rust code style as enforced by the `cargo fmt` command, check for style violations with `cargo clippy -D pedantic`.
+Follow the Rust code style as enforced by the `cargo fmt` command, check for style violations with `cargo clippy -- -D clippy::pedantic`.
 
 ## Testing
 
