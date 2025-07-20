@@ -10,6 +10,7 @@ use {
 #[derive(Debug)] // temp?
 pub(crate) struct EncryptionHeader {
     pub(crate) algorithm: EncryptionAlgorithm,
+    #[expect(dead_code)]
     size: u64,
     // TODO: Encryption payload parameters
     payload: Vec<u8>,
@@ -86,17 +87,17 @@ impl TryFrom<u64> for EncryptionAlgorithm {
     }
 }
 
-pub(crate) enum Encryptor<R: std::io::BufRead> {
-    None(R),
-    Xor(u8),
-}
+// pub(crate) enum Encryptor<R: std::io::BufRead> {
+//     None(R),
+//     Xor(u8),
+// }
 
-impl<R: std::io::BufRead> Encryptor<R> {
-    pub fn passthrough(r: R) -> Self {
-        Self::None(r)
-    }
+// impl<R: std::io::BufRead> Encryptor<R> {
+//     pub fn passthrough(r: R) -> Self {
+//         Self::None(r)
+//     }
 
-    pub fn xor(_r: R, key: u8) -> Self {
-        Self::Xor(key)
-    }
-}
+//     pub fn xor(_r: R, key: u8) -> Self {
+//         Self::Xor(key)
+//     }
+// }
