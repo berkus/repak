@@ -1,3 +1,11 @@
+use {
+    std::io::{Read, Write},
+    threefish::{
+        Threefish1024,
+        cipher::{BlockDecrypt, BlockEncrypt, KeyInit},
+    },
+};
+
 pub struct ThreefishWriter<W: Write> {
     writer: W,
     cipher: Box<Threefish1024>,

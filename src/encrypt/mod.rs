@@ -42,15 +42,6 @@ use {
     std::io::{BufRead, Read, Write},
 };
 
-#[cfg(feature = "encrypt-xts")]
-use {aes::Aes256, xts_mode::Xts128};
-
-#[cfg(feature = "encrypt-threefish")]
-use threefish::{
-    Threefish1024,
-    cipher::{BlockDecrypt, BlockEncrypt, KeyInit},
-};
-
 #[derive(Debug)]
 pub struct EncryptionHeader {
     pub algorithm: EncryptionAlgorithm,
@@ -60,10 +51,10 @@ pub struct EncryptionHeader {
 impl EncryptionHeader {
     pub fn new(algorithm: EncryptionAlgorithm) -> Self {
         let parameters = match algorithm {
-            EncryptionAlgorithm::None => vec![],
-            EncryptionAlgorithm::AesXts256 => vec![],
-            EncryptionAlgorithm::Hctr2 => vec![],
-            EncryptionAlgorithm::Adiantum => vec![],
+            EncryptionAlgorithm::None
+            | EncryptionAlgorithm::AesXts256
+            | EncryptionAlgorithm::Hctr2
+            | EncryptionAlgorithm::Adiantum => vec![],
             EncryptionAlgorithm::Threefish1024 => {
                 // Default to 1024-bit block size (1024 / 8 = 128 bytes)
                 1024u64.to_le_bytes().to_vec() // NB?
@@ -161,11 +152,11 @@ impl TryFrom<u64> for EncryptionAlgorithm {
 pub enum Encryptor<W: Write> {
     None(W),
     #[cfg(feature = "encrypt-xts")]
-    AesXts256(AesXts256<W>),
+    AesXts256(aes_xts_256::AesXts256Writer<W>),
     #[cfg(feature = "encrypt-adiantum")]
-    Adiantum(Adiantum<W>),
+    Adiantum(adiantum::AdiantumWriter<W>),
     #[cfg(feature = "encrypt-threefish")]
-    Threefish(Threefish<W>),
+    Threefish(threefish_1024::ThreefishWriter<W>),
 }
 
 #[cfg(feature = "encrypt-xts")]

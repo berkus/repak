@@ -1,3 +1,5 @@
+use std::io::{Read, Write};
+
 pub struct AdiantumWriter<W: Write> {
     writer: W,
     buffer: Vec<u8>,
