@@ -1,5 +1,6 @@
 #![feature(default_field_values)]
-#![allow(dead_code)]
+#![deny(dead_code)]
+#![deny(warnings)]
 
 use {
     crate::{
@@ -100,6 +101,7 @@ pub enum Error {
 /// ```
 pub struct REPAK {
     index: IndexHeader,
+    #[expect(dead_code)]
     index_attached: bool,
     file_path: PathBuf,
     last_insertion_offset: u64,
@@ -110,6 +112,7 @@ pub struct REPAK {
 /// Allows you to validate, decrypt, decompress, extract data.
 pub struct Entry<'a> {
     inner: &'a IndexEntry,
+    #[expect(dead_code)]
     source: Source,
 }
 
@@ -237,6 +240,7 @@ pub fn open(input: &Path) -> REPAK {
 }
 
 /// Source of the asset data
+#[expect(dead_code)]
 enum Source {
     /// File on disk
     File(PathBuf),
@@ -302,9 +306,9 @@ impl AppendOptions {
     }
 }
 
-fn passthrough<R: Read>(r: R) -> R {
-    r
-}
+// fn passthrough<R: Read>(r: R) -> R {
+//     r
+// }
 
 impl REPAK {
     /// Lookup a file in the archive.
@@ -647,8 +651,6 @@ struct IndexEntry {
     encryption: Option<EncryptionHeader>,
     compression: Option<CompressionHeader>,
     checksum: Option<ChecksumHeader>,
-
-    path: PathBuf,
 }
 
 impl Ser for IndexEntry {
