@@ -117,9 +117,7 @@ fn main() {
             .name
             .unwrap_or_else(|| format!("{}", asset.path.display()));
 
-        let entry = repak
-            .lookup(name.clone())
-            .context("Looking up REPAK resource")?;
+        let entry = repak.lookup(&name).context("Looking up REPAK resource")?;
         if entry.is_none() {
             let compression: CompressionAlgorithm = match &asset.compression {
                 Some(Compression::Best) => {
