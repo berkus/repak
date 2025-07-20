@@ -3,7 +3,7 @@
 
 use {
     crate::{
-        checksum::{ChecksumHeader, Checksummer, ChecksummingRead},
+        checksum::ChecksumHeader,
         compress::{CompressionHeader, compress_stream},
         encrypt::EncryptionHeader,
         io::Deser,
@@ -371,6 +371,7 @@ impl REPAK {
             };
 
             // Apply compression using streaming
+
             let (header, _) = compress_stream(source_reader, &mut archive_file, chosen_algorithm)?;
 
             // Get the current position to calculate compressed size
@@ -380,7 +381,9 @@ impl REPAK {
             (Some(header), compressed_size)
         } else {
             // No compression, copy data directly
+
             let bytes_written = copy(&mut source_reader, &mut archive_file)?;
+
             (None, bytes_written)
         };
 
@@ -418,56 +421,18 @@ impl REPAK {
     /// or if the index cannot be serialized.
     #[throws]
     pub fn save(&self) {
-        let mut pakfile = File::create(self.file_path.clone())?;
+        // Data has already been written to the archive during append() calls.
+        // We only need to append the index to the existing archive file.
 
-        // sort index by offset
+        // Sort entries by offset for index consistency
         let mut sorted = self.index.entries.values().collect::<Vec<_>>();
         sorted.sort_by(|a, b| a.offset.cmp(&b.offset));
 
-        // @todo: skip everything that is "already" in the archive
-
-        // write the rest
         for entry in sorted {
             println!("Sorted Entry: {entry:?}");
-            let infile = BufReader::new(File::open(entry.path.clone())?);
-
-            // Set up checksumming if needed
-            let checksummer = match &entry.checksum {
-                None => ChecksummingRead::new(infile, vec![]),
-                Some(_ch) => {
-                    // Convert Checksum enum instances to boxed Checksummer trait objects
-                    // This would need proper implementation based on how Checksum works
-                    let checksummers: Vec<Box<dyn Checksummer>> = vec![];
-                    ChecksummingRead::new(infile, checksummers)
-                }
-            };
-
-            // Compression is already handled during append phase
-            let mut reader: Box<dyn Read> = Box::new(checksummer);
-
-            // Apply encryption if needed
-            reader = match &entry.encryption {
-                Some(EncryptionHeader {
-                    algorithm: EncryptionAlgorithm::Xor,
-                    ..
-                }) => {
-                    // TODO: Actually implement XOR encryption
-                    reader
-                }
-                _ => reader,
-            };
-
-            // Write to pakfile
-            pakfile.seek(SeekFrom::Start(entry.offset))?;
-            copy(&mut reader, &mut pakfile)?;
-
-            // @todo: update checksummer and encryptor output metadata in the index
-            // entry.checksums = checksums;
         }
 
-        drop(pakfile);
-
-        // and then save the index
+        // Write the index to the archive file
         self.save_index()?;
     }
 
