@@ -71,6 +71,16 @@ impl std::fmt::Debug for K12 {
     }
 }
 
+impl K12 {
+    pub fn new(primer: String) -> Self {
+        Self {
+            state: Some(tiny_keccak::KangarooTwelve::new(primer.clone())),
+            primer,
+            digest: [0; 32],
+        }
+    }
+}
+
 impl Ser for K12 {
     #[throws(Error)]
     fn ser(&self, w: &mut impl Write) {
