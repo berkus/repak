@@ -4,7 +4,7 @@
 use {
     crate::{
         checksum::{ChecksumHeader, Checksummer, ChecksummingRead},
-        compress::CompressionHeader,
+        compress::{CompressionHeader, compress_stream, compress_stream_best},
         encrypt::EncryptionHeader,
         io::Deser,
     },
@@ -26,7 +26,7 @@ mod io;
 
 pub use {
     checksum::Checksum,
-    compress::{CompressionAlgorithm, pick_best_compression},
+    compress::{CompressionAlgorithm, decompress_stream, pick_best_compression},
     encrypt::EncryptionAlgorithm,
 };
 
@@ -343,32 +343,43 @@ impl REPAK {
             throw!(Error::AlreadyExists(id));
         }
 
-        let original_size = file.metadata()?.len();
-        let mut final_path = file.to_owned();
-        let mut final_size = original_size;
-        let mut compression_header = None;
+        if !file.exists() {
+            throw!(Error::FileNotFound(file.to_owned()));
+        }
 
-        // Apply compression if specified
-        if let Some(compression_alg) = options.compression {
-            let (header, compressed_data) = if let CompressionAlgorithm::Best = compression_alg {
-                // Use the pick_best_compression helper
-                pick_best_compression(file)?
+        // Open or create the archive file for writing
+        let mut archive_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .read(true)
+            .truncate(false)
+            .open(&self.file_path)?;
+
+        // Seek to the position where we'll write this entry's data
+        archive_file.seek(SeekFrom::Start(self.last_insertion_offset))?;
+
+        // Open source file for reading
+        let source_file = File::open(file)?;
+        let mut source_reader = BufReader::new(source_file);
+
+        let (compression_header, final_size) = if let Some(compression_alg) = options.compression {
+            // Apply compression using streaming
+            let (header, _) = if let CompressionAlgorithm::Best = compression_alg {
+                compress_stream_best(source_reader, &mut archive_file)?
             } else {
-                // Use specific compression algorithm
-                let data = std::fs::read(file)?;
-                crate::compress::compress_data(&data, compression_alg)?
+                compress_stream(source_reader, &mut archive_file, compression_alg)?
             };
 
-            // Create a temporary file for the compressed data
-            let mut temp_file = tempfile::NamedTempFile::new()?;
-            temp_file.write_all(&compressed_data)?;
-            temp_file.flush()?;
+            // Get the current position to calculate compressed size
+            let end_pos = archive_file.stream_position()?;
+            let compressed_size = end_pos - self.last_insertion_offset;
 
-            // Update path to point to the temporary file
-            final_path = temp_file.into_temp_path().to_path_buf();
-            final_size = compressed_data.len() as u64;
-            compression_header = Some(header);
-        }
+            (Some(header), compressed_size)
+        } else {
+            // No compression, copy data directly
+            let bytes_written = copy(&mut source_reader, &mut archive_file)?;
+            (None, bytes_written)
+        };
 
         // Create checksum header if checksums are specified
         let checksum_header = if options.checksums.is_empty() {
@@ -389,8 +400,9 @@ impl REPAK {
             encryption: encryption_header,
             compression: compression_header,
             checksum: checksum_header,
-            path: final_path,
+            path: file.to_owned(), // Store original source file path
         };
+
         self.last_insertion_offset += entry.size;
         self.index.entries.insert(id, entry);
     }

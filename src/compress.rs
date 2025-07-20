@@ -100,7 +100,7 @@ impl TryFrom<u64> for CompressionAlgorithm {
 }
 
 /// Decompress data from the given reader.
-pub(crate) enum Decompressor<R: BufRead> {
+pub enum Decompressor<R: BufRead> {
     Stored(R),
     #[cfg(feature = "compress-deflate")]
     Inflate(flate2::bufread::DeflateDecoder<R>),
@@ -190,6 +190,169 @@ impl<R: BufRead> Read for Decompressor<R> {
     }
 }
 
+/// Compress data to the given writer.
+pub(crate) enum Compressor<W: Write> {
+    Stored(W),
+    #[cfg(feature = "compress-deflate")]
+    Deflate(flate2::write::DeflateEncoder<W>),
+    #[cfg(feature = "compress-bzip")]
+    Bzip(bzip2::write::BzEncoder<W>),
+    #[cfg(feature = "compress-zstd")]
+    Zstd(zstd::Encoder<'static, W>),
+    #[cfg(feature = "compress-lzma")]
+    Lzma(xz2::write::XzEncoder<W>),
+    #[cfg(feature = "compress-lz4")]
+    Lz4(lz4::Encoder<W>),
+}
+
+impl<W: Write> Compressor<W> {
+    #[throws(Error)]
+    pub fn new(algorithm: CompressionAlgorithm, writer: W) -> Self {
+        match algorithm {
+            CompressionAlgorithm::None => Self::Stored(writer),
+            CompressionAlgorithm::Deflate => {
+                #[cfg(feature = "compress-deflate")]
+                {
+                    Self::Deflate(flate2::write::DeflateEncoder::new(
+                        writer,
+                        flate2::Compression::default(),
+                    ))
+                }
+                #[cfg(not(feature = "compress-deflate"))]
+                throw!(Error::Deser(
+                    "Deflate compression not supported".to_string()
+                ))
+            }
+            CompressionAlgorithm::Bzip => {
+                #[cfg(feature = "compress-bzip")]
+                {
+                    Self::Bzip(bzip2::write::BzEncoder::new(
+                        writer,
+                        bzip2::Compression::default(),
+                    ))
+                }
+                #[cfg(not(feature = "compress-bzip"))]
+                throw!(Error::Deser("Bzip2 compression not supported".to_string()))
+            }
+            CompressionAlgorithm::Zstd => {
+                #[cfg(feature = "compress-zstd")]
+                {
+                    let encoder =
+                        zstd::Encoder::new(writer, 0).map_err(|e| Error::Deser(e.to_string()))?;
+                    Self::Zstd(encoder)
+                }
+                #[cfg(not(feature = "compress-zstd"))]
+                throw!(Error::Deser("Zstd compression not supported".to_string()))
+            }
+            CompressionAlgorithm::Lzma => {
+                #[cfg(feature = "compress-lzma")]
+                {
+                    Self::Lzma(xz2::write::XzEncoder::new(writer, 6))
+                }
+                #[cfg(not(feature = "compress-lzma"))]
+                throw!(Error::Deser("LZMA compression not supported".to_string()))
+            }
+            CompressionAlgorithm::Lz4 => {
+                #[cfg(feature = "compress-lz4")]
+                {
+                    Self::Lz4(
+                        lz4::EncoderBuilder::new()
+                            .build(writer)
+                            .map_err(|e| Error::Deser(e.to_string()))?,
+                    )
+                }
+                #[cfg(not(feature = "compress-lz4"))]
+                throw!(Error::Deser("LZ4 compression not supported".to_string()))
+            }
+            CompressionAlgorithm::Best => {
+                throw!(Error::Deser(
+                    "Best algorithm cannot be used for streaming".to_string()
+                ))
+            }
+        }
+    }
+
+    #[throws(Error)]
+    pub fn finish(self) -> W {
+        match self {
+            Self::Stored(w) => w,
+            #[cfg(feature = "compress-deflate")]
+            Self::Deflate(w) => w.finish()?,
+            #[cfg(feature = "compress-bzip")]
+            Self::Bzip(w) => w.finish()?,
+            #[cfg(feature = "compress-zstd")]
+            Self::Zstd(w) => w.finish()?,
+            #[cfg(feature = "compress-lzma")]
+            Self::Lzma(w) => w.finish()?,
+            #[cfg(feature = "compress-lz4")]
+            Self::Lz4(w) => {
+                let (w, _) = w.finish();
+                w
+            }
+        }
+    }
+}
+
+impl<W: Write> Write for Compressor<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Stored(w) => w.write(buf),
+            #[cfg(feature = "compress-deflate")]
+            Self::Deflate(w) => w.write(buf),
+            #[cfg(feature = "compress-bzip")]
+            Self::Bzip(w) => w.write(buf),
+            #[cfg(feature = "compress-zstd")]
+            Self::Zstd(w) => w.write(buf),
+            #[cfg(feature = "compress-lzma")]
+            Self::Lzma(w) => w.write(buf),
+            #[cfg(feature = "compress-lz4")]
+            Self::Lz4(w) => w.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Stored(w) => w.flush(),
+            #[cfg(feature = "compress-deflate")]
+            Self::Deflate(w) => w.flush(),
+            #[cfg(feature = "compress-bzip")]
+            Self::Bzip(w) => w.flush(),
+            #[cfg(feature = "compress-zstd")]
+            Self::Zstd(w) => w.flush(),
+            #[cfg(feature = "compress-lzma")]
+            Self::Lzma(w) => w.flush(),
+            #[cfg(feature = "compress-lz4")]
+            Self::Lz4(w) => w.flush(),
+        }
+    }
+}
+
+/// Compress data from reader to writer using streaming compression
+#[throws(Error)]
+pub fn compress_stream<R: Read, W: Write>(
+    mut reader: R,
+    writer: W,
+    algorithm: CompressionAlgorithm,
+) -> (CompressionHeader, W) {
+    if matches!(algorithm, CompressionAlgorithm::Best) {
+        throw!(Error::Deser(
+            "Best algorithm cannot be used for streaming".to_string()
+        ));
+    }
+
+    // Read all data to calculate original size (required for header)
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data)?;
+    let original_size = data.len() as u64;
+
+    let mut compressor = Compressor::new(algorithm, writer)?;
+    compressor.write_all(&data)?;
+    let final_writer = compressor.finish()?;
+
+    let header = CompressionHeader::new(algorithm, original_size);
+    (header, final_writer)
+}
+
 /// Compresses data and returns compressed bytes along with compression header
 #[throws(Error)]
 pub(crate) fn compress_data(
@@ -244,7 +407,9 @@ pub(crate) fn compress_data(
                 encoder.finish()?
             }
             #[cfg(not(feature = "compress-deflate"))]
-            throw!(Error::Ser("Deflate compression not supported".to_string()))
+            throw!(Error::Deser(
+                "Deflate compression not supported".to_string()
+            ))
         }
         CompressionAlgorithm::Bzip => {
             #[cfg(feature = "compress-bzip")]
@@ -259,7 +424,7 @@ pub(crate) fn compress_data(
                 encoder.finish()?
             }
             #[cfg(not(feature = "compress-bzip"))]
-            throw!(Error::Ser("Bzip2 compression not supported".to_string()))
+            throw!(Error::Deser("Bzip2 compression not supported".to_string()))
         }
         CompressionAlgorithm::Zstd => {
             #[cfg(feature = "compress-zstd")]
@@ -267,7 +432,7 @@ pub(crate) fn compress_data(
                 zstd::encode_all(data, 0)?
             }
             #[cfg(not(feature = "compress-zstd"))]
-            throw!(Error::Ser("Zstd compression not supported".to_string()))
+            throw!(Error::Deser("Zstd compression not supported".to_string()))
         }
         CompressionAlgorithm::Lzma => {
             #[cfg(feature = "compress-lzma")]
@@ -279,7 +444,7 @@ pub(crate) fn compress_data(
                 encoder.finish()?
             }
             #[cfg(not(feature = "compress-lzma"))]
-            throw!(Error::Ser("LZMA compression not supported".to_string()))
+            throw!(Error::Deser("LZMA compression not supported".to_string()))
         }
         CompressionAlgorithm::Lz4 => {
             #[cfg(feature = "compress-lz4")]
@@ -291,7 +456,7 @@ pub(crate) fn compress_data(
                 compressed
             }
             #[cfg(not(feature = "compress-lz4"))]
-            throw!(Error::Ser("LZ4 compression not supported".to_string()))
+            throw!(Error::Deser("LZ4 compression not supported".to_string()))
         }
         CompressionAlgorithm::Best => {
             // This should never be reached due to the early return above
@@ -300,6 +465,29 @@ pub(crate) fn compress_data(
     };
 
     (header, compressed)
+}
+
+/// Compress from reader to writer using the best available algorithm
+#[throws(Error)]
+pub fn compress_stream_best<R: Read, W: Write>(reader: R, writer: W) -> (CompressionHeader, W) {
+    // For streaming best compression, we need to read all data first
+    // to test different algorithms
+    let mut data = Vec::new();
+    let mut reader = reader;
+    reader.read_to_end(&mut data)?;
+
+    let (header, compressed_data) = compress_data(&data, CompressionAlgorithm::Best)?;
+
+    let mut writer = writer;
+    writer.write_all(&compressed_data)?;
+
+    (header, writer)
+}
+
+/// Decompress data from reader using the compression header
+#[throws(Error)]
+pub fn decompress_stream<R: BufRead>(reader: R, header: &CompressionHeader) -> Decompressor<R> {
+    Decompressor::new(header.algorithm, reader)?
 }
 
 /// Take a source file, run series of compression algorithms, and return the best compressed result.
