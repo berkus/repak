@@ -188,7 +188,7 @@ impl Checksummer for SHA3 {
     }
 }
 
-/// K12 Implementation (simplified to avoid complex API)
+/// K12 Implementation
 #[cfg(feature = "checksum-k12")]
 #[derive(Clone, Debug, Default)]
 pub struct K12 {
