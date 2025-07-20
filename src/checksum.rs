@@ -190,11 +190,32 @@ impl Checksummer for SHA3 {
 
 /// K12 Implementation
 #[cfg(feature = "checksum-k12")]
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct K12 {
-    buffer: Vec<u8>,
+    state: Option<tiny_keccak::KangarooTwelve<String>>,
     primer: String,
     digest: [u8; 32],
+}
+
+#[cfg(feature = "checksum-k12")]
+impl Default for K12 {
+    fn default() -> Self {
+        Self {
+            state: None,
+            primer: String::new(),
+            digest: [0; 32],
+        }
+    }
+}
+
+#[cfg(feature = "checksum-k12")]
+impl std::fmt::Debug for K12 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("K12")
+            .field("primer", &self.primer)
+            .field("digest", &self.digest)
+            .finish()
+    }
 }
 
 #[cfg(feature = "checksum-k12")]
@@ -214,7 +235,7 @@ impl Deser for K12 {
         let mut digest = [0u8; 32];
         r.read_exact(&mut digest)?;
         Self {
-            buffer: Vec::new(),
+            state: Some(tiny_keccak::KangarooTwelve::new(primer.clone())),
             primer,
             digest,
         }
@@ -224,27 +245,17 @@ impl Deser for K12 {
 #[cfg(feature = "checksum-k12")]
 impl Checksummer for K12 {
     fn update(&mut self, data: &[u8]) {
-        self.buffer.extend_from_slice(data);
+        if self.state.is_none() {
+            self.state = Some(tiny_keccak::KangarooTwelve::new(self.primer.clone()));
+        }
+        if let Some(ref mut state) = self.state {
+            TinyKeccakHasher::update(state, data);
+        }
     }
 
     fn finalize(&mut self) {
-        // Simplified K12 - for now just use a placeholder
-        // In a real implementation, this would use the K12 algorithm
-        let mut hasher = DefaultHasher::new();
-        hasher.write(&self.buffer);
-        hasher.write(self.primer.as_bytes());
-        let hash = hasher.finish();
-
-        // Convert to 32-byte digest (simplified)
-        let hash_bytes = hash.to_le_bytes();
-        for (i, &byte) in hash_bytes.iter().enumerate() {
-            if i < 32 {
-                self.digest[i] = byte;
-            }
-        }
-        // Fill rest with repeated pattern
-        for i in 8..32 {
-            self.digest[i] = self.digest[i % 8];
+        if let Some(state) = self.state.take() {
+            TinyKeccakHasher::finalize(state, &mut self.digest);
         }
     }
 }
@@ -532,8 +543,9 @@ impl Checksum {
     #[cfg(feature = "checksum-k12")]
     pub fn new_k12(primer: String) -> Self {
         let k12 = K12 {
+            state: Some(tiny_keccak::KangarooTwelve::new(primer.clone())),
             primer,
-            ..Default::default()
+            digest: [0; 32],
         };
         Checksum::K12(k12)
     }
@@ -715,7 +727,7 @@ mod tests {
 
         assert_eq!(
             const_hex::encode(k12.digest),
-            "ddb9c633c97a7436ddb9c633c97a7436ddb9c633c97a7436ddb9c633c97a7436"
+            "1c43a25474a1106afe9b0a067d7f42f9b760cae8ff0001294ad3fd805dfed7f0"
         );
 
         // Test that the same input produces the same output
