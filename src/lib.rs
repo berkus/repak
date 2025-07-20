@@ -12,7 +12,6 @@ use {
         io::{BufReader, Cursor, Read, Seek, SeekFrom, Write, copy},
         path::{Path, PathBuf},
     },
-    tempfile,
 };
 
 mod checksum;

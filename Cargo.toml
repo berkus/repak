@@ -49,17 +49,17 @@ checksum-seahash = ["dep:seahash"]
 checksum-cityhash = ["dep:cityhash-rs"]
 
 [dependencies]
-blake3 = { version = "1.7", optional = true }
-bzip2 = { version = "0.4", optional = true }
+blake3 = { version = "1.8", optional = true }
+bzip2 = { version = "0.6", optional = true }
 byteorder = "1.5.0"
 cityhash-rs = { version = "1.0", optional = true }
 culpa = "1.0.2"
 flate2 = { version = "1.1", optional = true }
 leb128 = "0.2.5"
-lz4 = { version = "1.24", optional = true }
+lz4 = { version = "1.28", optional = true }
 seahash = { version = "4.1", optional = true }
-tempfile = "3.10.1"
-thiserror = "2.0.11"
+tempfile = "3.20.0"
+thiserror = "2.0.12"
 tiny-keccak = { version = "2.0", features = ["sha3", "k12"], optional = true }
 twox-hash = { version = "2.1", features = ["xxhash3_128"], optional = true }
 xz2 = { version = "0.1", optional = true }
@@ -70,8 +70,8 @@ xts-mode = { version = "0.5.1", optional = true }
 hctr2 = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
-anyhow = "1.0.95"
+anyhow = "1.0.98"
 argh = "0.1.13"
 const-hex = "1.14.1"
-serde = "1.0.217"
-serde_json = "1.0.138"
+serde = "1.0.219"
+serde_json = "1.0.141"
