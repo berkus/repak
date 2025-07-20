@@ -124,7 +124,7 @@ fn main() {
             let compression: CompressionAlgorithm = match &asset.compression {
                 Some(Compression::Best) => {
                     let (compression, _) = repak::pick_best_compression(&asset.path)?;
-                    compression
+                    compression.algorithm
                 }
                 Some(Compression::Zstd) => CompressionAlgorithm::Zstd,
                 Some(Compression::None) => CompressionAlgorithm::None,
@@ -133,7 +133,7 @@ fn main() {
                     match &m.global_options.compression {
                         Some(Compression::Best) => {
                             let (compression, _) = repak::pick_best_compression(&asset.path)?;
-                            compression
+                            compression.algorithm
                         }
                         Some(Compression::Zstd) => CompressionAlgorithm::Zstd,
                         Some(Compression::None) | None => CompressionAlgorithm::None,
