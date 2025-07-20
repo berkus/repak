@@ -569,27 +569,25 @@ mod tests {
     /// Fixed test data pattern for consistent checksummer testing
     const TEST_DATA: &[u8] = b"The quick brown fox jumps over the lazy dog. This is a fixed test pattern for checksummer validation. Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
 
-    // sha3-256
-    // k12-256
-    // blake3-256
-    // xxhash3-128
-    // seahash-64
-    // cityhash-128
-
     #[test]
     #[cfg(feature = "checksum-sha3")]
-    fn test_sha3_checksummer() {
+    fn test_sha3_256_checksummer() {
         let mut sha3 = SHA3::default();
         sha3.update(TEST_DATA);
         sha3.finalize();
 
-        // Verify the digest has correct length
         assert_eq!(sha3.digest.len(), 32);
 
         assert_eq!(
             const_hex::encode(sha3.digest),
             "250437a3f52595ecfbfcab1641d511c83c65f6314fa8c7d35924fe3e3c30cc62"
         );
+
+        // Test that the same input produces the same output
+        let mut sha3_2 = SHA3::default();
+        sha3_2.update(TEST_DATA);
+        sha3_2.finalize();
+        assert_eq!(sha3.digest, sha3_2.digest);
 
         // Test serialization/deserialization
         let mut buffer = Vec::new();
@@ -600,12 +598,11 @@ mod tests {
 
     #[test]
     #[cfg(feature = "checksum-blake3")]
-    fn test_blake3_checksummer() {
+    fn test_blake3_256_checksummer() {
         let mut blake3 = BLAKE3::default();
         blake3.update(TEST_DATA);
         blake3.finalize();
 
-        // Verify the digest has correct length
         assert_eq!(blake3.digest.len(), 32);
 
         assert_eq!(
@@ -628,7 +625,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "checksum-xxhash3")]
-    fn test_xxhash3_checksummer() {
+    fn test_xxhash3_128_checksummer() {
         let mut xxhash3 = Xxhash3::default();
         xxhash3.update(TEST_DATA);
         xxhash3.finalize();
@@ -655,12 +652,11 @@ mod tests {
 
     #[test]
     #[cfg(feature = "checksum-seahash")]
-    fn test_seahash_checksummer() {
+    fn test_seahash_64_checksummer() {
         let mut seahash = SeaHashWrapper::default();
         seahash.update(TEST_DATA);
         seahash.finalize();
 
-        // Verify the digest has correct length (8 bytes for SeaHash)
         assert_eq!(seahash.digest.len(), 8);
 
         assert_eq!(const_hex::encode(seahash.digest), "7302c33a9825ceb8");
@@ -680,7 +676,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "checksum-cityhash")]
-    fn test_cityhash_checksummer() {
+    fn test_cityhash_128_checksummer() {
         let mut cityhash = CityHashWrapper::default();
         cityhash.update(TEST_DATA);
         cityhash.finalize();
@@ -707,7 +703,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "checksum-k12")]
-    fn test_k12_checksummer() {
+    fn test_k12_256_checksummer() {
         let mut k12 = K12 {
             primer: "test_primer".to_string(),
             ..Default::default()
@@ -731,10 +727,20 @@ mod tests {
         k12_2.finalize();
         assert_eq!(k12.digest, k12_2.digest);
 
+        // Test that different primer produces different output
+        let mut k12_2 = K12 {
+            primer: "another_test_primer".to_string(),
+            ..Default::default()
+        };
+        k12_2.update(TEST_DATA);
+        k12_2.finalize();
+        assert_ne!(k12.digest, k12_2.digest);
+
         // Test serialization/deserialization
         let mut buffer = Vec::new();
         k12.ser(&mut buffer).unwrap();
         let deserialized = K12::deser(&mut Cursor::new(buffer)).unwrap();
+        assert_eq!(k12.primer, deserialized.primer);
         assert_eq!(k12.digest, deserialized.digest);
     }
 
