@@ -30,7 +30,7 @@ pub(crate) fn ser_string(w: &mut impl Write, str: &str) {
 #[throws(Error)]
 pub(crate) fn deser_string(r: &mut impl Read) -> String {
     let name_len = leb128::read::unsigned(r)?;
-    let mut data = vec![0; name_len as usize]; // Attack vec: too long string
+    let mut data = vec![0; usize::try_from(name_len)?]; // Attack vec: too long string
     r.read_exact(&mut data)?;
     String::from_utf8(data)?
 }

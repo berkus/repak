@@ -365,18 +365,12 @@ pub fn pick_best_compression(file: &Path) -> (CompressionHeader, Vec<u8>) {
 
     for algorithm in algorithms {
         // Try to compress with this algorithm
-        match compress_data(&data, algorithm) {
-            Ok((_header, compressed)) => {
-                if compressed.len() < best_size {
-                    best_size = compressed.len();
-                    best_algorithm = algorithm;
-                    best_data = compressed;
-                }
-            }
-            Err(_) => {
-                // Algorithm not supported or failed, skip
-                continue;
-            }
+        if let Ok((_header, compressed)) = compress_data(&data, algorithm)
+            && compressed.len() < best_size
+        {
+            best_size = compressed.len();
+            best_algorithm = algorithm;
+            best_data = compressed;
         }
     }
 
@@ -395,7 +389,8 @@ pub fn decompress_data(header: &CompressionHeader, compressed_data: &[u8]) -> Ve
                 use {flate2::read::DeflateDecoder, std::io::Read};
 
                 let mut decoder = DeflateDecoder::new(compressed_data);
-                let mut decompressed = Vec::with_capacity(header.decompressed_size as usize);
+                let mut decompressed =
+                    Vec::with_capacity(usize::try_from(header.decompressed_size)?);
                 decoder.read_to_end(&mut decompressed)?;
                 decompressed
             }
@@ -410,7 +405,8 @@ pub fn decompress_data(header: &CompressionHeader, compressed_data: &[u8]) -> Ve
                 use {bzip2::read::BzDecoder, std::io::Read};
 
                 let mut decoder = BzDecoder::new(compressed_data);
-                let mut decompressed = Vec::with_capacity(header.decompressed_size as usize);
+                let mut decompressed =
+                    Vec::with_capacity(usize::try_from(header.decompressed_size)?);
                 decoder.read_to_end(&mut decompressed)?;
                 decompressed
             }
@@ -431,7 +427,8 @@ pub fn decompress_data(header: &CompressionHeader, compressed_data: &[u8]) -> Ve
                 use {std::io::Read, xz2::read::XzDecoder};
 
                 let mut decoder = XzDecoder::new(compressed_data);
-                let mut decompressed = Vec::with_capacity(header.decompressed_size as usize);
+                let mut decompressed =
+                    Vec::with_capacity(usize::try_from(header.decompressed_size)?);
                 decoder.read_to_end(&mut decompressed)?;
                 decompressed
             }
@@ -443,7 +440,8 @@ pub fn decompress_data(header: &CompressionHeader, compressed_data: &[u8]) -> Ve
             {
                 use std::io::Read;
                 let mut decoder = lz4::Decoder::new(compressed_data)?;
-                let mut decompressed = Vec::with_capacity(header.decompressed_size as usize);
+                let mut decompressed =
+                    Vec::with_capacity(usize::try_from(header.decompressed_size)?);
                 decoder.read_to_end(&mut decompressed)?;
                 decompressed
             }

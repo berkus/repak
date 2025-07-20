@@ -40,13 +40,12 @@ impl Deser for EncryptionHeader {
         let algorithm = EncryptionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
         let size = leb128::read::unsigned(r)?;
         let payload = match algorithm {
-            EncryptionAlgorithm::None => vec![],
-            EncryptionAlgorithm::Xor => vec![],
+            EncryptionAlgorithm::None | EncryptionAlgorithm::Xor => vec![],
             _ => todo!(),
         };
         Self {
-            size,
             algorithm,
+            size,
             payload,
         }
     }

@@ -190,22 +190,11 @@ impl Checksummer for SHA3 {
 
 /// K12 Implementation
 #[cfg(feature = "checksum-k12")]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct K12 {
     state: Option<tiny_keccak::KangarooTwelve<String>>,
     primer: String,
     digest: [u8; 32],
-}
-
-#[cfg(feature = "checksum-k12")]
-impl Default for K12 {
-    fn default() -> Self {
-        Self {
-            state: None,
-            primer: String::new(),
-            digest: [0; 32],
-        }
-    }
 }
 
 #[cfg(feature = "checksum-k12")]

@@ -2,8 +2,13 @@
 #![allow(dead_code)]
 
 use {
-    crate::{checksum::*, compress::*, encrypt::*, io::Deser},
-    byteorder::*,
+    crate::{
+        checksum::{ChecksumHeader, Checksummer, ChecksummingRead},
+        compress::CompressionHeader,
+        encrypt::EncryptionHeader,
+        io::Deser,
+    },
+    byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt},
     culpa::{throw, throws},
     io::{Ser, deser_string, leb128_usize, ser_string},
     std::{
@@ -64,7 +69,7 @@ pub enum Error {
 /// - Append-only file structure
 /// - Multiple compression algorithms (deflate, bzip2, zstd, lzma, lz4, fsst)
 /// - Encryption support
-/// - Multiple checksumming methods (SHA3, K12, BLAKE3, XXHash3, SeaHash, CityHash)
+/// - Multiple checksumming methods (SHA3, K12, BLAKE3, `XXHash3`, `SeaHash`, `CityHash`)
 /// - Index structure for quickly locating assets
 ///
 /// # Example
@@ -107,38 +112,49 @@ pub struct Entry<'a> {
     source: Source,
 }
 
-impl<'a> Entry<'a> {
+impl Entry<'_> {
     /// Returns the name of the entry
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.inner.name
     }
 
     /// Returns the size of the entry in the archive
+    #[must_use]
     pub fn size(&self) -> u64 {
         self.inner.size
     }
 
     /// Returns the offset of the entry in the archive
+    #[must_use]
     pub fn offset(&self) -> u64 {
         self.inner.offset
     }
 
     /// Returns true if the entry is compressed
+    #[must_use]
     pub fn is_compressed(&self) -> bool {
         self.inner.compression.is_some()
     }
 
     /// Returns true if the entry is encrypted
+    #[must_use]
     pub fn is_encrypted(&self) -> bool {
         self.inner.encryption.is_some()
     }
 
     /// Returns true if the entry has checksums
+    #[must_use]
     pub fn has_checksums(&self) -> bool {
         self.inner.checksum.is_some()
     }
 
     /// Extracts the entry to the specified path
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the extraction fails due to I/O issues,
+    /// decryption failures, decompression errors, or checksum mismatches.
     #[throws(Error)]
     pub fn extract_to(&self, _path: &Path) {
         // Implementation would open the source file,
@@ -148,6 +164,11 @@ impl<'a> Entry<'a> {
     }
 
     /// Returns a reader that provides the raw content of the entry
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the reader cannot be created due to I/O issues,
+    /// or if decryption/decompression setup fails.
     #[throws(Error)]
     pub fn reader(&self) -> impl Read {
         // Implementation would open the source,
@@ -161,6 +182,11 @@ impl<'a> Entry<'a> {
 /// Create a new repak archive.
 ///
 /// The index will be created in a temporary file,
+///
+/// # Errors
+///
+/// Returns an error if the archive file cannot be created due to I/O issues
+/// or insufficient permissions.
 #[throws]
 pub fn create(output: &Path) -> REPAK {
     REPAK {
@@ -172,6 +198,11 @@ pub fn create(output: &Path) -> REPAK {
 }
 
 /// Open a repak archive.
+///
+/// # Errors
+///
+/// Returns an error if the archive file cannot be opened, read, or if the
+/// archive format is invalid or corrupted.
 #[throws]
 pub fn open(input: &Path) -> REPAK {
     if !fs::exists(input)? {
@@ -246,6 +277,7 @@ pub struct AppendOptions {
 }
 
 impl AppendOptions {
+    #[must_use]
     pub fn with_compression(self, c: CompressionAlgorithm) -> Self {
         Self {
             compression: Some(c),
@@ -253,6 +285,7 @@ impl AppendOptions {
         }
     }
 
+    #[must_use]
     pub fn with_encryption(self, c: EncryptionAlgorithm) -> Self {
         Self {
             encryption: Some(c),
@@ -260,6 +293,7 @@ impl AppendOptions {
         }
     }
 
+    #[must_use]
     pub fn with_checksum(self, c: Checksum) -> Self {
         let mut checksums = self.checksums;
         checksums.push(c);
@@ -275,12 +309,22 @@ impl REPAK {
     /// Lookup a file in the archive.
     ///
     /// Returns a reference to the file entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry size cannot be converted to usize on 32-bit platforms.
     #[throws]
-    pub fn lookup<'a>(&'a self, id: String) -> Option<Entry<'a>> {
-        self.index.entries.get(&id).map(|inner| Entry {
-            inner,
-            source: Source::Archive(inner.offset, inner.size as usize),
-        })
+    pub fn lookup<'a>(&'a self, id: &str) -> Option<Entry<'a>> {
+        self.index
+            .entries
+            .get(id)
+            .map(|inner| -> Result<Entry<'a>, Error> {
+                Ok(Entry {
+                    inner,
+                    source: Source::Archive(inner.offset, usize::try_from(inner.size)?),
+                })
+            })
+            .transpose()?
     }
 
     /// Append a file to the archive.
@@ -288,6 +332,11 @@ impl REPAK {
     /// Append options specify how to transform the file when adding.
     /// It is posible to request checksumming, compression, and encryption
     /// (in this order).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file already exists in the archive, the file
+    /// cannot be read, compression/encryption fails, or I/O operations fail.
     #[throws]
     pub fn append(&mut self, id: String, file: &Path, options: AppendOptions) {
         if self.index.entries.contains_key(&id) {
@@ -301,16 +350,13 @@ impl REPAK {
 
         // Apply compression if specified
         if let Some(compression_alg) = options.compression {
-            let (header, compressed_data) = match compression_alg {
-                CompressionAlgorithm::Best => {
-                    // Use the pick_best_compression helper
-                    pick_best_compression(file)?
-                }
-                _ => {
-                    // Use specific compression algorithm
-                    let data = std::fs::read(file)?;
-                    crate::compress::compress_data(&data, compression_alg)?
-                }
+            let (header, compressed_data) = if let CompressionAlgorithm::Best = compression_alg {
+                // Use the pick_best_compression helper
+                pick_best_compression(file)?
+            } else {
+                // Use specific compression algorithm
+                let data = std::fs::read(file)?;
+                crate::compress::compress_data(&data, compression_alg)?
             };
 
             // Create a temporary file for the compressed data
@@ -325,12 +371,12 @@ impl REPAK {
         }
 
         // Create checksum header if checksums are specified
-        let checksum_header = if !options.checksums.is_empty() {
+        let checksum_header = if options.checksums.is_empty() {
+            None
+        } else {
             Some(ChecksumHeader {
                 checksums: options.checksums,
             })
-        } else {
-            None
         };
 
         // Create encryption header if encryption is specified
@@ -350,6 +396,11 @@ impl REPAK {
     }
 
     /// Save the archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive file cannot be created or written to,
+    /// or if the index cannot be serialized.
     #[throws]
     pub fn save(&self) {
         let mut pakfile = File::create(self.file_path.clone())?;
@@ -381,19 +432,12 @@ impl REPAK {
 
             // Apply encryption if needed
             reader = match &entry.encryption {
-                None => reader,
-                Some(EncryptionHeader {
-                    algorithm: EncryptionAlgorithm::None,
-                    ..
-                }) => reader,
                 Some(EncryptionHeader {
                     algorithm: EncryptionAlgorithm::Xor,
                     ..
                 }) => {
-                    // Since Encryptor expects BufRead, we need to wrap in BufReader
-                    let buf_reader = BufReader::new(reader);
-                    // Not properly implemented yet
-                    Box::new(buf_reader)
+                    // TODO: Actually implement XOR encryption
+                    reader
                 }
                 _ => reader,
             };
@@ -442,7 +486,7 @@ impl REPAK {
 
 #[throws(std::io::Error)]
 fn make_index_locator(offset: u64) -> Vec<u8> {
-    let n = 64 - offset.leading_zeros() as u64;
+    let n = 64 - u64::from(offset.leading_zeros());
     // dbg!("Non-zero bits {}", n);
     // let align_down = fn(x: u64) -> u64 { x & !0x7f };
     let bsize = (n & !7) / 7;
@@ -623,16 +667,16 @@ struct IndexEntry {
 impl Ser for IndexEntry {
     #[throws(Error)]
     fn ser(&self, w: &mut impl Write) {
-        let flags = if self.encryption.is_some() { 0x1 } else { 0 }
-            | if self.compression.is_some() { 0x2 } else { 0 }
-            | if self.checksum.is_some() { 0x4 } else { 0 };
+        let flags = u64::from(self.encryption.is_some())
+            | (u64::from(self.compression.is_some()) << 1)
+            | (u64::from(self.checksum.is_some()) << 2);
 
         leb128::write::unsigned(w, self.offset)?;
         leb128::write::unsigned(w, self.size)?;
         leb128::write::unsigned(w, flags)?;
         ser_string(w, &self.name)?;
         if let Some(encryption) = &self.encryption {
-            encryption.ser(w)?
+            encryption.ser(w)?;
         }
         if let Some(compression) = &self.compression {
             compression.ser(w)?;
