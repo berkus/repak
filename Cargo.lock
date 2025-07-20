@@ -276,18 +276,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hctr2"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64cf45a6a65c242e99d2ba4c1298d30739be32404fb718faf3f4a79ebdfc4509"
-dependencies = [
- "byteorder",
- "cipher",
- "generic-array",
- "polyval",
-]
-
-[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -432,18 +420,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "polyval"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d1fe60d06143b2430aa532c94cfe9e29783047f06c0d7fd359a9a51b729fa25"
-dependencies = [
- "cfg-if",
- "cpufeatures",
- "opaque-debug",
- "universal-hash",
-]
-
-[[package]]
 name = "ppv-lite86"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -580,7 +556,6 @@ dependencies = [
  "const-hex",
  "culpa",
  "flate2",
- "hctr2",
  "leb128",
  "lz4",
  "seahash",
