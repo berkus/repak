@@ -3,50 +3,53 @@ use {
         Error,
         io::{Deser, Ser, leb128_usize},
     },
-    culpa::{throw, throws},
+    culpa,
     std::{
-        fs::File,
-        io::{Read, Write},
+        io::{BufRead, Read, Write},
         path::Path,
     },
 };
 
-#[derive(Debug)] // temp?
+#[derive(Debug)]
 pub(crate) struct CompressionHeader {
-    _size: u64,
     pub(crate) algorithm: CompressionAlgorithm,
-    // TODO: Compression payload parameters
-    payload: Vec<u8>,
+    pub(crate) decompressed_size: u64,
+}
+
+impl CompressionHeader {
+    pub fn new(algorithm: CompressionAlgorithm, decompressed_size: u64) -> Self {
+        Self {
+            algorithm,
+            decompressed_size,
+        }
+    }
 }
 
 impl Ser for CompressionHeader {
-    #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        let size = leb128_usize(self.algorithm.into())? + self.payload.len();
-        leb128::write::unsigned(w, size as u64)?;
+    fn ser(&self, w: &mut impl Write) -> Result<(), Error> {
+        // Calculate total size: algorithm_id + decompressed_size
+        let algorithm_id_size = leb128_usize(self.algorithm.into())?;
+        let decompressed_size_size = leb128_usize(self.decompressed_size)?;
+        let total_size = algorithm_id_size + decompressed_size_size;
+
+        // Write total size, algorithm ID, then decompressed size
+        leb128::write::unsigned(w, total_size as u64)?;
         leb128::write::unsigned(w, self.algorithm.into())?;
-        w.write_all(&self.payload)?;
+        leb128::write::unsigned(w, self.decompressed_size)?;
+        Ok(())
     }
 }
 
 impl Deser for CompressionHeader {
-    #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        let size = leb128::read::unsigned(r)?;
+    fn deser(r: &mut impl Read) -> Result<Self, Error> {
+        let _total_size = leb128::read::unsigned(r)?;
         let algorithm = CompressionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
-        let payload = match algorithm {
-            CompressionAlgorithm::None => vec![],
-            CompressionAlgorithm::Deflate => vec![],
-            CompressionAlgorithm::Bzip => vec![],
-            CompressionAlgorithm::Zstd => vec![],
-            CompressionAlgorithm::Lzma => vec![],
-            CompressionAlgorithm::Lz4 => vec![],
-        };
-        Self {
-            _size: size,
+        let decompressed_size = leb128::read::unsigned(r)?;
+
+        Ok(Self {
             algorithm,
-            payload,
-        }
+            decompressed_size,
+        })
     }
 }
 
@@ -58,6 +61,7 @@ pub enum CompressionAlgorithm {
     Zstd,
     Lzma,
     Lz4,
+    Best,
 }
 
 impl From<CompressionAlgorithm> for u64 {
@@ -69,6 +73,7 @@ impl From<CompressionAlgorithm> for u64 {
             CompressionAlgorithm::Zstd => 3,
             CompressionAlgorithm::Lzma => 4,
             CompressionAlgorithm::Lz4 => 5,
+            CompressionAlgorithm::Best => 255, // Meta-algorithm, not stored in files
         }
     }
 }
@@ -76,16 +81,16 @@ impl From<CompressionAlgorithm> for u64 {
 impl TryFrom<u64> for CompressionAlgorithm {
     type Error = Error;
 
-    #[throws(Self::Error)]
-    fn try_from(value: u64) -> Self {
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
         match value {
-            0 => Self::None,
-            1 => Self::Deflate,
-            2 => Self::Bzip,
-            3 => Self::Zstd,
-            4 => Self::Lzma,
-            5 => Self::Lz4,
-            _ => throw!(Error::Deser(format!(
+            0 => Ok(Self::None),
+            1 => Ok(Self::Deflate),
+            2 => Ok(Self::Bzip),
+            3 => Ok(Self::Zstd),
+            4 => Ok(Self::Lzma),
+            5 => Ok(Self::Lz4),
+            255 => Ok(Self::Best),
+            _ => Err(Error::Deser(format!(
                 "Unknown compression algorithm: {value}"
             ))),
         }
@@ -93,7 +98,7 @@ impl TryFrom<u64> for CompressionAlgorithm {
 }
 
 /// Decompress data from the given reader.
-pub(crate) enum Decompressor<R: std::io::BufRead> {
+pub(crate) enum Decompressor<R: BufRead> {
     Stored(R),
     #[cfg(feature = "compress-deflate")]
     Inflate(flate2::bufread::DeflateDecoder<R>),
@@ -107,139 +112,223 @@ pub(crate) enum Decompressor<R: std::io::BufRead> {
     Lz4(lz4::Decoder<R>),
 }
 
-impl<R: std::io::BufRead> std::io::Read for Decompressor<R> {
-    #[throws(std::io::Error)]
-    fn read(&mut self, buf: &mut [u8]) -> usize {
+impl<R: BufRead> Decompressor<R> {
+    pub fn new(algorithm: CompressionAlgorithm, reader: R) -> Result<Self, Error> {
+        Ok(match algorithm {
+            CompressionAlgorithm::None => Self::Stored(reader),
+            CompressionAlgorithm::Deflate => {
+                #[cfg(feature = "compress-deflate")]
+                {
+                    Self::Inflate(flate2::bufread::DeflateDecoder::new(reader))
+                }
+                #[cfg(not(feature = "compress-deflate"))]
+                return Err(Error::Deser(
+                    "Deflate compression not supported".to_string(),
+                ));
+            }
+            CompressionAlgorithm::Bzip => {
+                #[cfg(feature = "compress-bzip")]
+                {
+                    Self::Bzip(bzip2::read::BzDecoder::new(reader))
+                }
+                #[cfg(not(feature = "compress-bzip"))]
+                return Err(Error::Deser("Bzip2 compression not supported".to_string()));
+            }
+            CompressionAlgorithm::Zstd => {
+                #[cfg(feature = "compress-zstd")]
+                {
+                    let decoder = zstd::Decoder::with_buffer(reader)
+                        .map_err(|e| Error::Deser(e.to_string()))?;
+                    Self::Zstd(decoder)
+                }
+                #[cfg(not(feature = "compress-zstd"))]
+                return Err(Error::Deser("Zstd compression not supported".to_string()));
+            }
+            CompressionAlgorithm::Lzma => {
+                #[cfg(feature = "compress-lzma")]
+                {
+                    Self::Lzma(xz2::read::XzDecoder::new(reader))
+                }
+                #[cfg(not(feature = "compress-lzma"))]
+                return Err(Error::Deser("LZMA compression not supported".to_string()));
+            }
+            CompressionAlgorithm::Lz4 => {
+                #[cfg(feature = "compress-lz4")]
+                {
+                    Self::Lz4(lz4::Decoder::new(reader).map_err(|e| Error::Deser(e.to_string()))?)
+                }
+                #[cfg(not(feature = "compress-lz4"))]
+                return Err(Error::Deser("LZ4 compression not supported".to_string()));
+            }
+            CompressionAlgorithm::Best => {
+                return Err(Error::Deser(
+                    "Best algorithm should not appear in compressed data".to_string(),
+                ));
+            }
+        })
+    }
+}
+
+impl<R: BufRead> Read for Decompressor<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
-            Self::Stored(r) => r.read(buf)?,
+            Self::Stored(r) => r.read(buf),
             #[cfg(feature = "compress-deflate")]
-            Self::Inflate(r) => r.read(buf)?,
+            Self::Inflate(r) => r.read(buf),
             #[cfg(feature = "compress-bzip")]
-            Self::Bzip(r) => r.read(buf)?,
+            Self::Bzip(r) => r.read(buf),
             #[cfg(feature = "compress-zstd")]
-            Self::Zstd(r) => r.read(buf)?,
+            Self::Zstd(r) => r.read(buf),
             #[cfg(feature = "compress-lzma")]
-            Self::Lzma(r) => r.read(buf)?,
+            Self::Lzma(r) => r.read(buf),
             #[cfg(feature = "compress-lz4")]
-            Self::Lz4(r) => r.read(buf)?,
-            // Self::Fsst(r) => r.read(buf)?,
+            Self::Lz4(r) => r.read(buf),
         }
     }
 }
 
-pub(crate) enum Compressor<R: std::io::BufRead> {
-    Stored(R),
-    #[cfg(feature = "compress-deflate")]
-    Deflate(flate2::bufread::DeflateEncoder<R>),
-    #[cfg(feature = "compress-bzip")]
-    Bzip(bzip2::read::BzEncoder<R>),
-    #[cfg(feature = "compress-zstd")]
-    Zstd(zstd::stream::write::Encoder<'static, Vec<u8>>),
-    #[cfg(feature = "compress-lzma")]
-    Lzma(xz2::read::XzEncoder<R>),
-    #[cfg(feature = "compress-lz4")]
-    Lz4(lz4::EncoderBuilder),
-}
+/// Compresses data and returns compressed bytes along with compression header
+pub(crate) fn compress_data(
+    data: &[u8],
+    algorithm: CompressionAlgorithm,
+) -> Result<(CompressionHeader, Vec<u8>), Error> {
+    let original_size = data.len() as u64;
 
-impl<R: std::io::BufRead> Compressor<R> {
-    pub fn store(r: R) -> Self {
-        Self::Stored(r)
-    }
+    // Handle Best algorithm by trying all algorithms and picking the smallest
+    if matches!(algorithm, CompressionAlgorithm::Best) {
+        let algorithms = [
+            CompressionAlgorithm::None,
+            CompressionAlgorithm::Deflate,
+            CompressionAlgorithm::Bzip,
+            CompressionAlgorithm::Zstd,
+            CompressionAlgorithm::Lzma,
+            CompressionAlgorithm::Lz4,
+        ];
 
-    pub fn deflate(r: R) -> Self {
-        #[cfg(feature = "compress-deflate")]
-        {
-            Self::Deflate(flate2::bufread::DeflateEncoder::new(
-                r,
-                flate2::Compression::default(),
-            ))
+        let mut best_algorithm = CompressionAlgorithm::None;
+        let mut best_size = data.len();
+        let mut best_data = data.to_vec();
+
+        for alg in algorithms {
+            if let Ok((_, compressed)) = compress_data(data, alg) {
+                if compressed.len() < best_size {
+                    best_size = compressed.len();
+                    best_algorithm = alg;
+                    best_data = compressed;
+                }
+            }
         }
-        #[cfg(not(feature = "compress-deflate"))]
-        {
-            Self::Stored(r)
-        }
+
+        let header = CompressionHeader::new(best_algorithm, original_size);
+        return Ok((header, best_data));
     }
 
-    #[cfg(feature = "compress-bzip")]
-    pub fn bzip(r: R) -> Self {
-        Self::Bzip(bzip2::read::BzEncoder::new(
-            r,
-            bzip2::Compression::default(),
-        ))
-    }
+    let header = CompressionHeader::new(algorithm, original_size);
 
-    #[cfg(feature = "compress-zstd")]
-    pub fn zstd(_r: R) -> Self {
-        // Zstd's API is different - it doesn't have a direct BufRead wrapper
-        // This would need to be implemented differently
-        unimplemented!("Zstd compression not fully implemented")
-    }
-
-    #[cfg(feature = "compress-lzma")]
-    pub fn lzma(r: R) -> Self {
-        Self::Lzma(xz2::read::XzEncoder::new(r, 6))
-    }
-
-    #[cfg(feature = "compress-lz4")]
-    pub fn lz4(_r: R) -> Self {
-        // LZ4's API is different - it doesn't have a direct BufRead wrapper
-        // This would need to be implemented differently
-        unimplemented!("Lz4 compression not fully implemented")
-    }
-}
-
-impl<R: std::io::BufRead> std::io::Read for Compressor<R> {
-    #[throws(std::io::Error)]
-    fn read(&mut self, buf: &mut [u8]) -> usize {
-        match self {
-            Self::Stored(r) => r.read(buf)?,
+    let compressed = match algorithm {
+        CompressionAlgorithm::None => data.to_vec(),
+        CompressionAlgorithm::Deflate => {
             #[cfg(feature = "compress-deflate")]
-            Self::Deflate(r) => r.read(buf)?,
-            #[cfg(feature = "compress-bzip")]
-            Self::Bzip(r) => r.read(buf)?,
-            #[cfg(feature = "compress-zstd")]
-            Self::Zstd(_) => unimplemented!("Zstd reading not implemented"),
-            #[cfg(feature = "compress-lzma")]
-            Self::Lzma(r) => r.read(buf)?,
-            #[cfg(feature = "compress-lz4")]
-            Self::Lz4(_) => unimplemented!("Lz4 reading not implemented"),
-            // Self::Fsst(r) => r.read(buf)?,
+            {
+                use {
+                    flate2::{Compression, write::DeflateEncoder},
+                    std::io::Write,
+                };
+
+                let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+                encoder.write_all(data)?;
+                encoder.finish()?
+            }
+            #[cfg(not(feature = "compress-deflate"))]
+            return Err(Error::Ser("Deflate compression not supported".to_string()));
         }
-    }
+        CompressionAlgorithm::Bzip => {
+            #[cfg(feature = "compress-bzip")]
+            {
+                use {
+                    bzip2::{Compression, write::BzEncoder},
+                    std::io::Write,
+                };
+
+                let mut encoder = BzEncoder::new(Vec::new(), Compression::default());
+                encoder.write_all(data)?;
+                encoder.finish()?
+            }
+            #[cfg(not(feature = "compress-bzip"))]
+            return Err(Error::Ser("Bzip2 compression not supported".to_string()));
+        }
+        CompressionAlgorithm::Zstd => {
+            #[cfg(feature = "compress-zstd")]
+            {
+                zstd::encode_all(data.as_ref(), 0)?
+            }
+            #[cfg(not(feature = "compress-zstd"))]
+            return Err(Error::Ser("Zstd compression not supported".to_string()));
+        }
+        CompressionAlgorithm::Lzma => {
+            #[cfg(feature = "compress-lzma")]
+            {
+                use {std::io::Write, xz2::write::XzEncoder};
+
+                let mut encoder = XzEncoder::new(Vec::new(), 6);
+                encoder.write_all(data)?;
+                encoder.finish()?
+            }
+            #[cfg(not(feature = "compress-lzma"))]
+            return Err(Error::Ser("LZMA compression not supported".to_string()));
+        }
+        CompressionAlgorithm::Lz4 => {
+            #[cfg(feature = "compress-lz4")]
+            {
+                use std::io::Write;
+                let mut encoder = lz4::EncoderBuilder::new().build(Vec::new())?;
+                encoder.write_all(data)?;
+                let (compressed, _) = encoder.finish();
+                compressed
+            }
+            #[cfg(not(feature = "compress-lz4"))]
+            return Err(Error::Ser("LZ4 compression not supported".to_string()));
+        }
+        CompressionAlgorithm::Best => {
+            // This should never be reached due to the early return above
+            unreachable!("Best algorithm should be handled earlier")
+        }
+    };
+
+    Ok((header, compressed))
 }
 
-/// Take a source file, run series of compression algorithms, and return the best compressed file.
+/// Take a source file, run series of compression algorithms, and return the best compressed result.
 ///
 /// This function compresses the entire input file with each available algorithm and chooses
-/// the one that produces the smallest output. It returns a tuple with the selected algorithm
-/// and a File handle to the compressed data (stored in a temporary directory).
+/// the one that produces the smallest output. It returns a tuple with the compression header
+/// and the compressed data.
 ///
 /// - For small files or already compressed formats, returns the original file without compression
-/// - Cleans up any temporary files created during the process, except for the best one
-/// - The returned File is owned by the caller and will persist until closed
-/// - The temporary directory is automatically cleaned up when the last handle to a file in it is closed
+/// - Only tests algorithms that are enabled via features
 ///
 /// # Arguments
 /// * `file` - Path to the original file to compress
 ///
 /// # Returns
-/// * `(CompressionAlgorithm, File)` - The best algorithm and a handle to the compressed file
+/// * `(CompressionHeader, Vec<u8>)` - The best compression header and compressed data
 ///
 /// # Errors
 /// * `Error::FileNotFound` if the input file doesn't exist
 /// * I/O errors from file operations
-#[throws(Error)]
-pub fn pick_best_compression(file: &Path) -> (CompressionAlgorithm, File) {
+pub fn pick_best_compression(file: &Path) -> Result<(CompressionHeader, Vec<u8>), Error> {
     if !file.exists() {
-        throw!(Error::FileNotFound(file.to_owned()));
+        return Err(Error::FileNotFound(file.to_owned()));
     }
 
-    let file_size = file.metadata()?.len();
+    // Read the entire file
+    let data = std::fs::read(file)?;
+    let file_size = data.len();
 
     // For small files, compression might not be worth it
     if file_size < 1024 {
-        // Less than 1KB
-        return (CompressionAlgorithm::None, File::open(file)?);
+        let header = CompressionHeader::new(CompressionAlgorithm::None, file_size as u64);
+        return Ok((header, data));
     }
 
     // Check file extension to skip known already-compressed formats
@@ -248,86 +337,16 @@ pub fn pick_best_compression(file: &Path) -> (CompressionAlgorithm, File) {
             // Already compressed formats
             "jpg" | "jpeg" | "png" | "mp3" | "mp4" | "zip" | "gz" | "xz" | "7z" | "rar"
             | "webp" | "webm" | "aac" | "ogg" | "flac" => {
-                return (CompressionAlgorithm::None, File::open(file)?);
+                let header = CompressionHeader::new(CompressionAlgorithm::None, file_size as u64);
+                return Ok((header, data));
             }
             _ => {}
         }
     }
 
-    // Create a temporary directory for compressed files
-    let temp_dir = tempfile::Builder::new()
-        .prefix("repak_compress_")
-        .tempdir()?;
-
-    // Define a function to compress the file using a specific algorithm
-    #[throws(Error)]
-    fn compress_file(
-        input_file: &Path,
-        algorithm: CompressionAlgorithm,
-        temp_dir: &tempfile::TempDir,
-    ) -> Option<(std::path::PathBuf, u64)> {
-        use std::io::{BufReader, Read, Write};
-
-        // Skip if algorithm is None (we'll compare against the original size)
-        if matches!(algorithm, CompressionAlgorithm::None) {
-            return Some((input_file.to_path_buf(), input_file.metadata()?.len()));
-        }
-
-        // Create output path in temp directory
-        let file_name = format!("{algorithm:?}.tmp");
-        let output_path = temp_dir.path().join(file_name);
-
-        // Only try to compress if the algorithm is available
-        match algorithm {
-            CompressionAlgorithm::None => unreachable!(), // Handled above
-            CompressionAlgorithm::Deflate => {
-                #[cfg(feature = "compress-deflate")]
-                {
-                    let input = File::open(input_file)?;
-                    let reader = BufReader::new(input);
-                    let output = File::create(&output_path)?;
-                    let mut writer = std::io::BufWriter::new(output);
-
-                    let mut compressor = Compressor::deflate(reader);
-                    let mut buffer = [0; 8192];
-                    loop {
-                        let bytes_read = compressor.read(&mut buffer)?;
-                        if bytes_read == 0 {
-                            break;
-                        }
-                        writer.write_all(&buffer[..bytes_read])?;
-                    }
-                    writer.flush()?;
-
-                    // Return the path and size of compressed file
-                    let size = output_path.metadata()?.len();
-                    return Some((output_path, size));
-                }
-                #[cfg(not(feature = "compress-deflate"))]
-                return None;
-            }
-            CompressionAlgorithm::Bzip => {
-                // Not currently implemented
-                None
-            }
-            CompressionAlgorithm::Zstd => {
-                // Not currently implemented
-                None
-            }
-            CompressionAlgorithm::Lzma => {
-                // Not currently implemented
-                None
-            }
-            CompressionAlgorithm::Lz4 => {
-                // Not currently implemented
-                None
-            }
-        }
-    }
-
-    // Try each algorithm and find the best one
+    // Try each available algorithm and find the best one
     let algorithms = [
-        CompressionAlgorithm::None, // This represents the original uncompressed file
+        CompressionAlgorithm::None,
         CompressionAlgorithm::Deflate,
         CompressionAlgorithm::Bzip,
         CompressionAlgorithm::Zstd,
@@ -337,44 +356,101 @@ pub fn pick_best_compression(file: &Path) -> (CompressionAlgorithm, File) {
 
     let mut best_algorithm = CompressionAlgorithm::None;
     let mut best_size = file_size;
-    let mut best_path = file.to_path_buf();
-    let mut temp_files = Vec::new();
+    let mut best_data = data.clone();
 
     for algorithm in algorithms {
-        // Skip None as we've already recorded its size
-        if matches!(algorithm, CompressionAlgorithm::None) {
-            continue;
-        }
-
         // Try to compress with this algorithm
-        if let Ok(Some((path, size))) = compress_file(file, algorithm, &temp_dir) {
-            // Track this temporary file for cleanup
-            if path != file {
-                temp_files.push(path.clone());
+        match compress_data(&data, algorithm) {
+            Ok((_header, compressed)) => {
+                if compressed.len() < best_size {
+                    best_size = compressed.len();
+                    best_algorithm = algorithm;
+                    best_data = compressed;
+                }
             }
-
-            // Check if this is better than our current best
-            if size < best_size {
-                best_size = size;
-                best_algorithm = algorithm;
-                best_path = path;
+            Err(_) => {
+                // Algorithm not supported or failed, skip
+                continue;
             }
         }
     }
 
-    // Remove temporary files except the best one
-    for path in temp_files {
-        if path != best_path {
-            // Try to delete, but don't fail if we can't
-            let _ = std::fs::remove_file(&path);
+    let header = CompressionHeader::new(best_algorithm, file_size as u64);
+    Ok((header, best_data))
+}
+
+/// Decompress data using the given compression header
+pub fn decompress_data(
+    header: &CompressionHeader,
+    compressed_data: &[u8],
+) -> Result<Vec<u8>, Error> {
+    Ok(match header.algorithm {
+        CompressionAlgorithm::None => compressed_data.to_vec(),
+        CompressionAlgorithm::Deflate => {
+            #[cfg(feature = "compress-deflate")]
+            {
+                use {flate2::read::DeflateDecoder, std::io::Read};
+
+                let mut decoder = DeflateDecoder::new(compressed_data);
+                let mut decompressed = Vec::with_capacity(header.decompressed_size as usize);
+                decoder.read_to_end(&mut decompressed)?;
+                decompressed
+            }
+            #[cfg(not(feature = "compress-deflate"))]
+            return Err(Error::Deser(
+                "Deflate compression not supported".to_string(),
+            ));
         }
-    }
+        CompressionAlgorithm::Bzip => {
+            #[cfg(feature = "compress-bzip")]
+            {
+                use {bzip2::read::BzDecoder, std::io::Read};
 
-    // If the best algorithm is None, return the original file
-    if matches!(best_algorithm, CompressionAlgorithm::None) {
-        return (CompressionAlgorithm::None, File::open(file)?);
-    }
+                let mut decoder = BzDecoder::new(compressed_data);
+                let mut decompressed = Vec::with_capacity(header.decompressed_size as usize);
+                decoder.read_to_end(&mut decompressed)?;
+                decompressed
+            }
+            #[cfg(not(feature = "compress-bzip"))]
+            return Err(Error::Deser("Bzip2 compression not supported".to_string()));
+        }
+        CompressionAlgorithm::Zstd => {
+            #[cfg(feature = "compress-zstd")]
+            {
+                zstd::decode_all(compressed_data)?
+            }
+            #[cfg(not(feature = "compress-zstd"))]
+            return Err(Error::Deser("Zstd compression not supported".to_string()));
+        }
+        CompressionAlgorithm::Lzma => {
+            #[cfg(feature = "compress-lzma")]
+            {
+                use {std::io::Read, xz2::read::XzDecoder};
 
-    // Otherwise, return the compressed file
-    (best_algorithm, File::open(&best_path)?)
+                let mut decoder = XzDecoder::new(compressed_data);
+                let mut decompressed = Vec::with_capacity(header.decompressed_size as usize);
+                decoder.read_to_end(&mut decompressed)?;
+                decompressed
+            }
+            #[cfg(not(feature = "compress-lzma"))]
+            return Err(Error::Deser("LZMA compression not supported".to_string()));
+        }
+        CompressionAlgorithm::Lz4 => {
+            #[cfg(feature = "compress-lz4")]
+            {
+                use std::io::Read;
+                let mut decoder = lz4::Decoder::new(compressed_data)?;
+                let mut decompressed = Vec::with_capacity(header.decompressed_size as usize);
+                decoder.read_to_end(&mut decompressed)?;
+                decompressed
+            }
+            #[cfg(not(feature = "compress-lz4"))]
+            return Err(Error::Deser("LZ4 compression not supported".to_string()));
+        }
+        CompressionAlgorithm::Best => {
+            return Err(Error::Deser(
+                "Best algorithm should not appear in compressed data".to_string(),
+            ));
+        }
+    })
 }

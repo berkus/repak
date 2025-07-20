@@ -12,6 +12,7 @@ use {
         io::{BufReader, Cursor, Read, Seek, SeekFrom, Write, copy},
         path::{Path, PathBuf},
     },
+    tempfile,
 };
 
 mod checksum;
@@ -289,28 +290,61 @@ impl REPAK {
     /// It is posible to request checksumming, compression, and encryption
     /// (in this order).
     #[throws]
-    pub fn append(&mut self, id: String, file: &Path, _options: AppendOptions) {
+    pub fn append(&mut self, id: String, file: &Path, options: AppendOptions) {
         if self.index.entries.contains_key(&id) {
             throw!(Error::AlreadyExists(id));
         }
-        // need to apply compression and encryption here to calculate in-archive offset and size
-        // a) pick compression based on options
-        // b) pick encryption based on options
-        // c) calculate size
 
-        // this shall be handled by the tooling - pick_best_compression() is provided as a helper.
-        // if options.compression == Some(CompressionAlgorithm::Best) {
-        //     let (compression, temp_file) = pick_best_compression(file)?;
-        // }
+        let original_size = file.metadata()?.len();
+        let mut final_path = file.to_owned();
+        let mut final_size = original_size;
+        let mut compression_header = None;
+
+        // Apply compression if specified
+        if let Some(compression_alg) = options.compression {
+            let (header, compressed_data) = match compression_alg {
+                CompressionAlgorithm::Best => {
+                    // Use the pick_best_compression helper
+                    pick_best_compression(file)?
+                }
+                _ => {
+                    // Use specific compression algorithm
+                    let data = std::fs::read(file)?;
+                    crate::compress::compress_data(&data, compression_alg)?
+                }
+            };
+
+            // Create a temporary file for the compressed data
+            let mut temp_file = tempfile::NamedTempFile::new()?;
+            temp_file.write_all(&compressed_data)?;
+            temp_file.flush()?;
+
+            // Update path to point to the temporary file
+            final_path = temp_file.into_temp_path().to_path_buf();
+            final_size = compressed_data.len() as u64;
+            compression_header = Some(header);
+        }
+
+        // Create checksum header if checksums are specified
+        let checksum_header = if !options.checksums.is_empty() {
+            Some(ChecksumHeader {
+                checksums: options.checksums,
+            })
+        } else {
+            None
+        };
+
+        // Create encryption header if encryption is specified
+        let encryption_header = options.encryption.map(|alg| EncryptionHeader::new(alg));
 
         let entry = IndexEntry {
             offset: self.last_insertion_offset,
-            size: file.metadata()?.len(),
+            size: final_size,
             name: id.clone(),
-            encryption: None,  //options.encryption,
-            compression: None, //options.compression,
-            checksum: None,    //options.checksum,
-            path: file.to_owned(),
+            encryption: encryption_header,
+            compression: compression_header,
+            checksum: checksum_header,
+            path: final_path,
         };
         self.last_insertion_offset += entry.size;
         self.index.entries.insert(id, entry);
@@ -343,19 +377,8 @@ impl REPAK {
                 }
             };
 
-            // Handle compression if needed
-            let mut reader: Box<dyn Read> = match entry.compression {
-                None => Box::new(checksummer),
-                Some(CompressionHeader {
-                    algorithm: CompressionAlgorithm::Deflate,
-                    ..
-                }) => {
-                    // Create a BufReader wrapper since Compressor expects BufRead
-                    let buf_reader = BufReader::new(checksummer);
-                    Box::new(Compressor::deflate(buf_reader))
-                }
-                _ => Box::new(checksummer),
-            };
+            // Compression is already handled during append phase
+            let mut reader: Box<dyn Read> = Box::new(checksummer);
 
             // Apply encryption if needed
             reader = match &entry.encryption {
