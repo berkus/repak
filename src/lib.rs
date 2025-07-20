@@ -419,7 +419,7 @@ impl REPAK {
             encryption: encryption_header,
             compression: compression_header,
             checksum: checksum_header,
-            path: file.to_owned(), // Store original source file path
+            // path: file.to_owned(), // Store original source file path
         };
 
         self.last_insertion_offset += entry.size;
