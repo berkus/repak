@@ -1,5 +1,5 @@
 #![feature(default_field_values)]
-#![deny(dead_code)]
+#![allow(dead_code)]
 #![deny(warnings)]
 
 use {
