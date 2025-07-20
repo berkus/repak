@@ -31,7 +31,7 @@ impl Deser for ChecksumHeader {
     #[throws(Error)]
     fn deser(r: &mut impl Read) -> Self {
         let count = leb128::read::unsigned(r)?;
-        let mut checksums = Vec::with_capacity(count as usize);
+        let mut checksums = Vec::with_capacity(usize::try_from(count).unwrap_or(0));
         for _ in 0..count {
             checksums.push(Checksum::deser(r)?);
         }
@@ -94,7 +94,7 @@ impl Ser for Checksum {
             Checksum::SeaHash(seahash) => seahash.ser(w)?,
             #[cfg(feature = "checksum-cityhash")]
             Checksum::CityHash(cityhash) => cityhash.ser(w)?,
-        };
+        }
     }
 }
 
@@ -140,7 +140,7 @@ impl std::fmt::Debug for SHA3 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SHA3")
             .field("digest", &self.digest)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -214,7 +214,7 @@ impl std::fmt::Debug for K12 {
         f.debug_struct("K12")
             .field("primer", &self.primer)
             .field("digest", &self.digest)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -272,7 +272,7 @@ impl std::fmt::Debug for BLAKE3 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BLAKE3")
             .field("digest", &self.digest)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -321,7 +321,7 @@ impl Checksummer for BLAKE3 {
     }
 }
 
-/// Xxhash3 Implementation (uses std::hash::Hasher interface)
+/// Xxhash3 Implementation (uses `std::hash::Hasher` interface)
 #[cfg(feature = "checksum-xxhash3")]
 #[derive(Clone)]
 pub struct Xxhash3 {
@@ -334,7 +334,7 @@ impl std::fmt::Debug for Xxhash3 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Xxhash3")
             .field("digest", &self.digest)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -387,7 +387,7 @@ impl Checksummer for Xxhash3 {
     }
 }
 
-/// SeaHash Implementation (uses std::hash::Hasher interface)
+/// `SeaHash` Implementation (uses `std::hash::Hasher` interface)
 #[cfg(feature = "checksum-seahash")]
 #[derive(Default, Clone)]
 pub struct SeaHashWrapper {
@@ -400,7 +400,7 @@ impl std::fmt::Debug for SeaHashWrapper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SeaHashWrapper")
             .field("digest", &self.digest)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -439,7 +439,7 @@ impl Checksummer for SeaHashWrapper {
     }
 }
 
-/// CityHash Implementation (wrapper for function-based API)
+/// `CityHash` Implementation (wrapper for function-based API)
 #[cfg(feature = "checksum-cityhash")]
 #[derive(Default, Debug, Clone)]
 pub struct CityHashWrapper {
@@ -492,7 +492,7 @@ impl Checksummer for CityHashWrapper {
 }
 
 ///=============================================================================
-/// ChecksummingRead wrapper
+/// `ChecksummingRead` wrapper
 ///=============================================================================
 pub(crate) struct ChecksummingRead<R: Read> {
     reader: R,
@@ -536,11 +536,13 @@ impl<R: Read> Read for ChecksummingRead<R> {
 ///=============================================================================
 impl Checksum {
     #[cfg(feature = "checksum-sha3")]
+    #[must_use]
     pub fn new_sha3() -> Self {
         Checksum::SHA3(SHA3::default())
     }
 
     #[cfg(feature = "checksum-k12")]
+    #[must_use]
     pub fn new_k12(primer: String) -> Self {
         let k12 = K12 {
             state: Some(tiny_keccak::KangarooTwelve::new(primer.clone())),
@@ -551,21 +553,25 @@ impl Checksum {
     }
 
     #[cfg(feature = "checksum-blake3")]
+    #[must_use]
     pub fn new_blake3() -> Self {
         Checksum::BLAKE3(BLAKE3::default())
     }
 
     #[cfg(feature = "checksum-xxhash3")]
+    #[must_use]
     pub fn new_xxhash3() -> Self {
         Checksum::Xxhash3(Xxhash3::default())
     }
 
     #[cfg(feature = "checksum-seahash")]
+    #[must_use]
     pub fn new_seahash() -> Self {
         Checksum::SeaHash(SeaHashWrapper::default())
     }
 
     #[cfg(feature = "checksum-cityhash")]
+    #[must_use]
     pub fn new_cityhash() -> Self {
         Checksum::CityHash(CityHashWrapper::default())
     }
