@@ -549,7 +549,7 @@ pub fn pick_best_compression(file: &Path) -> CompressionAlgorithm {
     let file_size = data.len();
 
     // For small files, compression might not be worth it
-    if file_size < 1024 {
+    if file_size < 128 {
         return CompressionAlgorithm::None;
     }
 
