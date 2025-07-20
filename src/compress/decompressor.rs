@@ -102,6 +102,84 @@ impl<R: BufRead> Read for Decompressor<R> {
     }
 }
 
+/// Decompress data using the given compression header
+#[throws(Error)]
+pub fn decompress_data(header: &CompressionHeader, compressed_data: &[u8]) -> Vec<u8> {
+    match header.algorithm {
+        CompressionAlgorithm::None => compressed_data.to_vec(),
+        CompressionAlgorithm::Deflate => {
+            #[cfg(feature = "compress-deflate")]
+            {
+                use {flate2::read::DeflateDecoder, std::io::Read};
+
+                let mut decoder = DeflateDecoder::new(compressed_data);
+                let mut decompressed =
+                    Vec::with_capacity(usize::try_from(header.decompressed_size)?);
+                decoder.read_to_end(&mut decompressed)?;
+                decompressed
+            }
+            #[cfg(not(feature = "compress-deflate"))]
+            throw!(Error::Deser(
+                "Deflate compression not supported".to_string(),
+            ))
+        }
+        CompressionAlgorithm::Bzip => {
+            #[cfg(feature = "compress-bzip")]
+            {
+                use {bzip2::read::BzDecoder, std::io::Read};
+
+                let mut decoder = BzDecoder::new(compressed_data);
+                let mut decompressed =
+                    Vec::with_capacity(usize::try_from(header.decompressed_size)?);
+                decoder.read_to_end(&mut decompressed)?;
+                decompressed
+            }
+            #[cfg(not(feature = "compress-bzip"))]
+            throw!(Error::Deser("Bzip2 compression not supported".to_string()))
+        }
+        CompressionAlgorithm::Zstd => {
+            #[cfg(feature = "compress-zstd")]
+            {
+                zstd::decode_all(compressed_data)?
+            }
+            #[cfg(not(feature = "compress-zstd"))]
+            throw!(Error::Deser("Zstd compression not supported".to_string()))
+        }
+        CompressionAlgorithm::Lzma => {
+            #[cfg(feature = "compress-lzma")]
+            {
+                use {std::io::Read, xz2::read::XzDecoder};
+
+                let mut decoder = XzDecoder::new(compressed_data);
+                let mut decompressed =
+                    Vec::with_capacity(usize::try_from(header.decompressed_size)?);
+                decoder.read_to_end(&mut decompressed)?;
+                decompressed
+            }
+            #[cfg(not(feature = "compress-lzma"))]
+            throw!(Error::Deser("LZMA compression not supported".to_string()))
+        }
+        CompressionAlgorithm::Lz4 => {
+            #[cfg(feature = "compress-lz4")]
+            {
+                use std::io::Read;
+                let mut decoder = lz4::Decoder::new(compressed_data)?;
+                let mut decompressed =
+                    Vec::with_capacity(usize::try_from(header.decompressed_size)?);
+                decoder.read_to_end(&mut decompressed)?;
+                decompressed
+            }
+            #[cfg(not(feature = "compress-lz4"))]
+            throw!(Error::Deser("LZ4 compression not supported".to_string()))
+        }
+        CompressionAlgorithm::Best => {
+            throw!(Error::Deser(
+                "Best algorithm should not appear in compressed data".to_string(),
+            ))
+        }
+    }
+}
+
 /// Decompress data from reader using the compression header
 ///
 /// Creates a streaming decompressor that can read compressed data from the given reader
