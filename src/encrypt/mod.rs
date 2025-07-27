@@ -111,21 +111,23 @@ impl Deser for EncryptionHeader {
 
 #[derive(Clone, Copy, Debug)]
 pub enum EncryptionAlgorithm {
-    None,
-    AesXts256,
-    Hctr2,
-    Adiantum,
-    Threefish1024,
+    None,          // 0
+    Xor,           // 1
+    AesXts256,     // 2
+    Hctr2,         // 3
+    Adiantum,      // 4
+    Threefish1024, // 5
 }
 
 impl From<EncryptionAlgorithm> for u64 {
     fn from(value: EncryptionAlgorithm) -> u64 {
         match value {
             EncryptionAlgorithm::None => 0,
-            EncryptionAlgorithm::AesXts256 => 1,
-            EncryptionAlgorithm::Hctr2 => 2,
-            EncryptionAlgorithm::Adiantum => 3,
-            EncryptionAlgorithm::Threefish1024 => 4,
+            EncryptionAlgorithm::Xor => 1,
+            EncryptionAlgorithm::AesXts256 => 2,
+            EncryptionAlgorithm::Hctr2 => 3,
+            EncryptionAlgorithm::Adiantum => 4,
+            EncryptionAlgorithm::Threefish1024 => 5,
         }
     }
 }
@@ -137,10 +139,11 @@ impl TryFrom<u64> for EncryptionAlgorithm {
     fn try_from(value: u64) -> Self {
         match value {
             0 => Self::None,
-            1 => Self::AesXts256,
-            2 => Self::Hctr2,
-            3 => Self::Adiantum,
-            4 => Self::Threefish1024,
+            1 => Self::Xor,
+            2 => Self::AesXts256,
+            3 => Self::Hctr2,
+            4 => Self::Adiantum,
+            5 => Self::Threefish1024,
             _ => throw!(Error::UnsupportedEncryption(format!(
                 "Unknown encryption algorithm: {value}. If it is one of the standard encryption kinds, check your library is compiled with corresponding encrypt-* feature enabled."
             ))),
@@ -151,6 +154,7 @@ impl TryFrom<u64> for EncryptionAlgorithm {
 /// Encrypt data to the given writer.
 pub enum Encryptor<W: Write> {
     None(W),
+    Xor(xor::XorWriter<W>),
     #[cfg(feature = "encrypt-xts")]
     AesXts256(aes_xts_256::AesXts256Writer<W>),
     #[cfg(feature = "encrypt-adiantum")]
@@ -159,14 +163,13 @@ pub enum Encryptor<W: Write> {
     Threefish(threefish_1024::ThreefishWriter<W>),
 }
 
-#[cfg(feature = "encrypt-xts")]
-mod aes_xts_256;
-
 #[cfg(feature = "encrypt-adiantum")]
 mod adiantum;
-
+#[cfg(feature = "encrypt-xts")]
+mod aes_xts_256;
 #[cfg(feature = "encrypt-threefish")]
 mod threefish_1024;
+mod xor;
 
 impl<W: Write> Encryptor<W> {
     #[throws(Error)]
@@ -177,23 +180,7 @@ impl<W: Write> Encryptor<W> {
     #[cfg(feature = "encrypt-xts")]
     #[throws(Error)]
     fn new_aes_xts_256(writer: W, key: &[u8]) -> Self {
-        if key.len() != 64 {
-            throw!(Error::UnsupportedEncryption(
-                "AES-XTS-256 requires 64-byte key".to_string()
-            ));
-        }
-
-        use aes::cipher::{KeyInit, generic_array::GenericArray};
-        let cipher1 = Aes256::new(GenericArray::from_slice(&key[..32]));
-        let cipher2 = Aes256::new(GenericArray::from_slice(&key[32..]));
-        let cipher = Xts128::new(cipher1, cipher2);
-
-        Self::AesXts256(AesXts256 {
-            writer,
-            cipher,
-            buffer: Vec::new(),
-            position: 0,
-        })
+        Self::AesXts256(aes_xts_256::AesXts256Writer::new(writer, key)?)
     }
 
     #[cfg(feature = "encrypt-adiantum")]
@@ -525,23 +512,7 @@ impl<R: BufRead> DecryptingReader<R> {
     #[cfg(feature = "encrypt-xts")]
     #[throws(Error)]
     fn new_aes_xts_256(reader: R, key: &[u8]) -> Self {
-        if key.len() != 64 {
-            throw!(Error::UnsupportedEncryption(
-                "AES-XTS-256 requires 64-byte key".to_string()
-            ));
-        }
-
-        use aes::cipher::{KeyInit, generic_array::GenericArray};
-        let cipher1 = Aes256::new(GenericArray::from_slice(&key[..32]));
-        let cipher2 = Aes256::new(GenericArray::from_slice(&key[32..]));
-        let cipher = Xts128::new(cipher1, cipher2);
-
-        Self::AesXts256 {
-            reader,
-            cipher: Box::new(cipher),
-            buffer: Vec::new(),
-            position: 0,
-        }
+        Self::AesXts256(aes_xts_256::AesXts256Reader::new(reader, key)?)
     }
 
     #[cfg(feature = "encrypt-adiantum")]
