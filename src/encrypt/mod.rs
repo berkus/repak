@@ -66,7 +66,7 @@ impl EncryptionHeader {
             EncryptionAlgorithm::Adiantum => vec![],
             EncryptionAlgorithm::Threefish1024 => {
                 // Default to 1024-bit block size (1024 / 8 = 128 bytes)
-                1024u64.to_le_bytes().to_vec()
+                1024u64.to_le_bytes().to_vec() // NB?
             }
         };
 
@@ -161,50 +161,149 @@ impl TryFrom<u64> for EncryptionAlgorithm {
 pub enum Encryptor<W: Write> {
     None(W),
     #[cfg(feature = "encrypt-xts")]
-    AesXts256(EncryptingWriter<W>),
+    AesXts256(AesXts256<W>),
     #[cfg(feature = "encrypt-adiantum")]
-    Adiantum(EncryptingWriter<W>),
+    Adiantum(Adiantum<W>),
     #[cfg(feature = "encrypt-threefish")]
-    Threefish(EncryptingWriter<W>),
+    Threefish(Threefish<W>),
 }
+
+#[cfg(feature = "encrypt-xts")]
+mod aes_xts_256;
+
+#[cfg(feature = "encrypt-adiantum")]
+mod adiantum;
+
+#[cfg(feature = "encrypt-threefish")]
+mod threefish_1024;
 
 impl<W: Write> Encryptor<W> {
     #[throws(Error)]
-    pub fn new(algorithm: EncryptionAlgorithm, writer: W, key: &[u8]) -> Self {
-        match algorithm {
-            EncryptionAlgorithm::None => Self::None(writer),
-            EncryptionAlgorithm::AesXts256 => {
-                #[cfg(feature = "encrypt-xts")]
-                {
-                    Self::AesXts256(EncryptingWriter::new_aes_xts_256(writer, key)?)
+    fn new_passthrough(writer: W) -> Self {
+        Self::None(writer)
+    }
+
+    #[cfg(feature = "encrypt-xts")]
+    #[throws(Error)]
+    fn new_aes_xts_256(writer: W, key: &[u8]) -> Self {
+        if key.len() != 64 {
+            throw!(Error::UnsupportedEncryption(
+                "AES-XTS-256 requires 64-byte key".to_string()
+            ));
+        }
+
+        use aes::cipher::{KeyInit, generic_array::GenericArray};
+        let cipher1 = Aes256::new(GenericArray::from_slice(&key[..32]));
+        let cipher2 = Aes256::new(GenericArray::from_slice(&key[32..]));
+        let cipher = Xts128::new(cipher1, cipher2);
+
+        Self::AesXts256(AesXts256 {
+            writer,
+            cipher,
+            buffer: Vec::new(),
+            position: 0,
+        })
+    }
+
+    #[cfg(feature = "encrypt-adiantum")]
+    #[throws(Error)]
+    fn new_adiantum(writer: W, key: &[u8]) -> Self {
+        if key.len() != 32 {
+            throw!(Error::UnsupportedEncryption(
+                "Adiantum requires 32-byte key".to_string()
+            ));
+        }
+
+        // TODO: Implement proper Adiantum encryption with ChaCha20 and AES
+        // For now, just pass through data without encryption
+        Self::Adiantum(Adiantum {
+            writer,
+            buffer: Vec::new(),
+            nonce_counter: 0,
+        })
+    }
+
+    #[cfg(feature = "encrypt-threefish")]
+    #[throws(Error)]
+    fn new_threefish_1024(writer: W, key: &[u8]) -> Self {
+        if key.len() != 128 {
+            throw!(Error::UnsupportedEncryption(
+                "Threefish-1024 requires 128-byte key".to_string()
+            ));
+        }
+
+        use threefish::cipher::generic_array::GenericArray;
+        let cipher = Threefish1024::new(GenericArray::from_slice(key));
+
+        Self::Threefish(Threefish {
+            writer,
+            cipher: Box::new(cipher),
+            buffer: Vec::new(),
+        })
+    }
+
+    #[throws(Error)]
+    fn finish(self) -> W {
+        match self {
+            #[cfg(feature = "encrypt-xts")]
+            Self::AesXts256 {
+                mut writer,
+                cipher,
+                mut buffer,
+                position,
+            } => {
+                if !buffer.is_empty() {
+                    // Pad to 16-byte boundary for AES
+                    while !buffer.len().is_multiple_of(16) {
+                        buffer.push(0);
+                    }
+
+                    use xts_mode::get_tweak_default;
+                    let sector_size = 16;
+                    let sector_index = position / sector_size;
+                    cipher.encrypt_area(
+                        &mut buffer,
+                        sector_size as usize,
+                        sector_index as u128,
+                        get_tweak_default,
+                    );
+                    writer.write_all(&buffer)?;
                 }
-                #[cfg(not(feature = "encrypt-xts"))]
-                throw!(Error::UnsupportedEncryption(
-                    "AES-XTS-256 encryption not supported".to_string()
-                ))
+                writer
             }
-            EncryptionAlgorithm::Hctr2 => {
-                unimplemented!("HCTR2 encryption not yet implemented")
-            }
-            EncryptionAlgorithm::Adiantum => {
-                #[cfg(feature = "encrypt-adiantum")]
-                {
-                    Self::Adiantum(EncryptingWriter::new_adiantum(writer, key)?)
+            #[cfg(feature = "encrypt-adiantum")]
+            Self::Adiantum {
+                mut writer, buffer, ..
+            } => {
+                if !buffer.is_empty() {
+                    // TODO: Implement actual Adiantum encryption - for now just pass through
+                    writer.write_all(&buffer)?;
                 }
-                #[cfg(not(feature = "encrypt-adiantum"))]
-                throw!(Error::UnsupportedEncryption(
-                    "Adiantum encryption not supported".to_string()
-                ))
+                writer
             }
-            EncryptionAlgorithm::Threefish1024 => {
-                #[cfg(feature = "encrypt-threefish")]
-                {
-                    Self::Threefish(EncryptingWriter::new_threefish_1024(writer, key)?)
+            #[cfg(feature = "encrypt-threefish")]
+            Self::Threefish {
+                mut writer,
+                cipher,
+                mut buffer,
+            } => {
+                if !buffer.is_empty() {
+                    // Pad to 128-byte boundary for Threefish-1024
+                    while !buffer.len().is_multiple_of(128) {
+                        buffer.push(0);
+                    }
+
+                    use threefish::cipher::generic_array::GenericArray;
+                    for chunk in buffer.chunks_mut(128) {
+                        if chunk.len() == 128 {
+                            let mut block = GenericArray::clone_from_slice(chunk);
+                            cipher.encrypt_block(&mut block);
+                            chunk.copy_from_slice(&block);
+                        }
+                    }
+                    writer.write_all(&buffer)?;
                 }
-                #[cfg(not(feature = "encrypt-threefish"))]
-                throw!(Error::UnsupportedEncryption(
-                    "Threefish-1024 encryption not supported".to_string()
-                ))
+                writer
             }
         }
     }
@@ -349,155 +448,9 @@ pub fn decrypt_stream<R: BufRead>(
     Decryptor::new(algorithm, reader, key)?
 }
 
-// Internal helper structs for encryption/decryption
-pub(crate) enum EncryptingWriter<W: Write> {
-    #[cfg(feature = "encrypt-xts")]
-    AesXts256 {
-        writer: W,
-        cipher: Xts128<Aes256>,
-        buffer: Vec<u8>,
-        position: u64,
-    },
-    #[cfg(feature = "encrypt-adiantum")]
-    Adiantum {
-        writer: W,
-        buffer: Vec<u8>,
-        nonce_counter: u64,
-    },
-    #[cfg(feature = "encrypt-threefish")]
-    Threefish {
-        writer: W,
-        cipher: Box<Threefish1024>,
-        buffer: Vec<u8>,
-    },
-}
-
-impl<W: Write> EncryptingWriter<W> {
-    #[cfg(feature = "encrypt-xts")]
-    #[throws(Error)]
-    fn new_aes_xts_256(writer: W, key: &[u8]) -> Self {
-        if key.len() != 64 {
-            throw!(Error::UnsupportedEncryption(
-                "AES-XTS-256 requires 64-byte key".to_string()
-            ));
-        }
-
-        use aes::cipher::{KeyInit, generic_array::GenericArray};
-        let cipher1 = Aes256::new(GenericArray::from_slice(&key[..32]));
-        let cipher2 = Aes256::new(GenericArray::from_slice(&key[32..]));
-        let cipher = Xts128::new(cipher1, cipher2);
-
-        Self::AesXts256 {
-            writer,
-            cipher,
-            buffer: Vec::new(),
-            position: 0,
-        }
-    }
-
-    #[cfg(feature = "encrypt-adiantum")]
-    #[throws(Error)]
-    fn new_adiantum(writer: W, key: &[u8]) -> Self {
-        if key.len() != 32 {
-            throw!(Error::UnsupportedEncryption(
-                "Adiantum requires 32-byte key".to_string()
-            ));
-        }
-
-        // TODO: Implement proper Adiantum encryption with ChaCha20 and AES
-        // For now, just pass through data without encryption
-        Self::Adiantum {
-            writer,
-            buffer: Vec::new(),
-            nonce_counter: 0,
-        }
-    }
-
-    #[cfg(feature = "encrypt-threefish")]
-    #[throws(Error)]
-    fn new_threefish_1024(writer: W, key: &[u8]) -> Self {
-        if key.len() != 128 {
-            throw!(Error::UnsupportedEncryption(
-                "Threefish-1024 requires 128-byte key".to_string()
-            ));
-        }
-
-        use threefish::cipher::generic_array::GenericArray;
-        let cipher = Threefish1024::new(GenericArray::from_slice(key));
-
-        Self::Threefish {
-            writer,
-            cipher: Box::new(cipher),
-            buffer: Vec::new(),
-        }
-    }
-
-    #[throws(Error)]
-    fn finish(self) -> W {
-        match self {
-            #[cfg(feature = "encrypt-xts")]
-            Self::AesXts256 {
-                mut writer,
-                cipher,
-                mut buffer,
-                position,
-            } => {
-                if !buffer.is_empty() {
-                    // Pad to 16-byte boundary for AES
-                    while !buffer.len().is_multiple_of(16) {
-                        buffer.push(0);
-                    }
-
-                    use xts_mode::get_tweak_default;
-                    let sector_size = 16;
-                    let sector_index = position / sector_size;
-                    cipher.encrypt_area(
-                        &mut buffer,
-                        sector_size as usize,
-                        sector_index as u128,
-                        get_tweak_default,
-                    );
-                    writer.write_all(&buffer)?;
-                }
-                writer
-            }
-            #[cfg(feature = "encrypt-adiantum")]
-            Self::Adiantum {
-                mut writer, buffer, ..
-            } => {
-                if !buffer.is_empty() {
-                    // TODO: Implement actual Adiantum encryption - for now just pass through
-                    writer.write_all(&buffer)?;
-                }
-                writer
-            }
-            #[cfg(feature = "encrypt-threefish")]
-            Self::Threefish {
-                mut writer,
-                cipher,
-                mut buffer,
-            } => {
-                if !buffer.is_empty() {
-                    // Pad to 128-byte boundary for Threefish-1024
-                    while !buffer.len().is_multiple_of(128) {
-                        buffer.push(0);
-                    }
-
-                    use threefish::cipher::generic_array::GenericArray;
-                    for chunk in buffer.chunks_mut(128) {
-                        if chunk.len() == 128 {
-                            let mut block = GenericArray::clone_from_slice(chunk);
-                            cipher.encrypt_block(&mut block);
-                            chunk.copy_from_slice(&block);
-                        }
-                    }
-                    writer.write_all(&buffer)?;
-                }
-                writer
-            }
-        }
-    }
-}
+//=========================
+//=========================
+//=========================
 
 impl<W: Write> Write for EncryptingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -573,27 +526,9 @@ impl<W: Write> Write for EncryptingWriter<W> {
     }
 }
 
-pub(crate) enum DecryptingReader<R: BufRead> {
-    #[cfg(feature = "encrypt-xts")]
-    AesXts256 {
-        reader: R,
-        cipher: Xts128<Aes256>,
-        buffer: Vec<u8>,
-        position: u64,
-    },
-    #[cfg(feature = "encrypt-adiantum")]
-    Adiantum {
-        reader: R,
-        buffer: Vec<u8>,
-        nonce_counter: u64,
-    },
-    #[cfg(feature = "encrypt-threefish")]
-    Threefish {
-        reader: R,
-        cipher: Threefish1024,
-        buffer: Vec<u8>,
-    },
-}
+//===========================
+//===========================
+//===========================
 
 impl<R: BufRead> DecryptingReader<R> {
     #[cfg(feature = "encrypt-xts")]
@@ -612,7 +547,7 @@ impl<R: BufRead> DecryptingReader<R> {
 
         Self::AesXts256 {
             reader,
-            cipher,
+            cipher: Box::new(cipher),
             buffer: Vec::new(),
             position: 0,
         }
@@ -650,7 +585,7 @@ impl<R: BufRead> DecryptingReader<R> {
 
         Self::Threefish {
             reader,
-            cipher,
+            cipher: Box::new(cipher),
             buffer: Vec::new(),
         }
     }
@@ -840,7 +775,7 @@ mod tests {
             encrypt_stream(cursor, output, EncryptionAlgorithm::AesXts256, &key).unwrap();
 
         // Encrypted data should be different from original
-        assert_ne!(encrypted_data, data);
+        assert_ne!(encrypted_data, data); // NB!
 
         // Decrypt
         let reader = BufReader::new(Cursor::new(encrypted_data));
