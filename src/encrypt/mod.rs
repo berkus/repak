@@ -192,20 +192,7 @@ impl<W: Write> Encryptor<W> {
     #[cfg(feature = "encrypt-threefish")]
     #[throws(Error)]
     fn new_threefish_1024(writer: W, key: &[u8]) -> Self {
-        if key.len() != 128 {
-            throw!(Error::UnsupportedEncryption(
-                "Threefish-1024 requires 128-byte key".to_string()
-            ));
-        }
-
-        use threefish::cipher::generic_array::GenericArray;
-        let cipher = Threefish1024::new(GenericArray::from_slice(key));
-
-        Self::Threefish(Threefish {
-            writer,
-            cipher: Box::new(cipher),
-            buffer: Vec::new(),
-        })
+        Self::Threefish(threefish_1024::ThreefishWriter::new(writer, key)?)
     }
 
     #[throws(Error)]
@@ -512,20 +499,7 @@ impl<R: BufRead> DecryptingReader<R> {
     #[cfg(feature = "encrypt-threefish")]
     #[throws(Error)]
     fn new_threefish_1024(reader: R, key: &[u8]) -> Self {
-        if key.len() != 128 {
-            throw!(Error::UnsupportedEncryption(
-                "Threefish-1024 requires 128-byte key".to_string()
-            ));
-        }
-
-        use threefish::cipher::generic_array::GenericArray;
-        let cipher = Threefish1024::new(GenericArray::from_slice(key));
-
-        Self::Threefish {
-            reader,
-            cipher: Box::new(cipher),
-            buffer: Vec::new(),
-        }
+        Self::Threefish(threefish_1024::ThreefishReader::new(reader, key)?)
     }
 }
 
