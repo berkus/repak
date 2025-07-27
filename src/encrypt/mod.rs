@@ -52,6 +52,7 @@ impl EncryptionHeader {
     pub fn new(algorithm: EncryptionAlgorithm) -> Self {
         let parameters = match algorithm {
             EncryptionAlgorithm::None
+            | EncryptionAlgorithm::Xor
             | EncryptionAlgorithm::AesXts256
             | EncryptionAlgorithm::Hctr2
             | EncryptionAlgorithm::Adiantum => vec![],
@@ -68,6 +69,7 @@ impl EncryptionHeader {
     }
 
     pub fn new_threefish(block_size_bits: u64) -> Self {
+        #[allow(clippy::manual_assert)]
         if !matches!(block_size_bits, 256 | 512 | 1024) {
             panic!("Invalid Threefish block size: must be 256, 512, or 1024 bits");
         }
@@ -99,7 +101,7 @@ impl Deser for EncryptionHeader {
     fn deser(r: &mut impl Read) -> Self {
         let algorithm = EncryptionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
         let params_len = leb128::read::unsigned(r)?;
-        let mut parameters = vec![0u8; params_len as usize];
+        let mut parameters = vec![0u8; usize::try_from(params_len)?];
         r.read_exact(&mut parameters)?;
 
         Self {
@@ -173,104 +175,37 @@ mod xor;
 
 impl<W: Write> Encryptor<W> {
     #[throws(Error)]
-    fn new_passthrough(writer: W) -> Self {
-        Self::None(writer)
-    }
-
-    #[cfg(feature = "encrypt-xts")]
-    #[throws(Error)]
-    fn new_aes_xts_256(writer: W, key: &[u8]) -> Self {
-        Self::AesXts256(aes_xts_256::AesXts256Writer::new(writer, key)?)
-    }
-
-    #[cfg(feature = "encrypt-adiantum")]
-    #[throws(Error)]
-    fn new_adiantum(writer: W, key: &[u8]) -> Self {
-        Self::Adiantum(adiantum::AdiantumWriter::new(writer, key)?)
-    }
-
-    #[cfg(feature = "encrypt-threefish")]
-    #[throws(Error)]
-    fn new_threefish_1024(writer: W, key: &[u8]) -> Self {
-        Self::Threefish(threefish_1024::ThreefishWriter::new(writer, key)?)
+    fn new(algorithm: EncryptionAlgorithm, writer: W, key: &[u8]) -> Self {
+        match algorithm {
+            EncryptionAlgorithm::None => Self::None(writer),
+            EncryptionAlgorithm::Xor => Self::Xor(xor::XorWriter::new(writer, key)?),
+            #[cfg(feature = "encrypt-xts")]
+            EncryptionAlgorithm::AesXts256 => {
+                Self::AesXts256(aes_xts_256::AesXts256Writer::new(writer, key)?)
+            }
+            #[cfg(feature = "encrypt-adiantum")]
+            EncryptionAlgorithm::Adiantum => {
+                Self::Adiantum(adiantum::AdiantumWriter::new(writer, key)?)
+            }
+            #[cfg(feature = "encrypt-threefish")]
+            EncryptionAlgorithm::Threefish1024 => {
+                Self::Threefish(threefish_1024::ThreefishWriter::new(writer, key)?)
+            }
+            EncryptionAlgorithm::Hctr2 => unimplemented!(),
+        }
     }
 
     #[throws(Error)]
     fn finish(self) -> W {
         match self {
+            Self::None(writer) => writer,
+            Self::Xor(xor) => xor.finish(),
             #[cfg(feature = "encrypt-xts")]
-            Self::AesXts256 {
-                mut writer,
-                cipher,
-                mut buffer,
-                position,
-            } => {
-                if !buffer.is_empty() {
-                    // Pad to 16-byte boundary for AES
-                    while !buffer.len().is_multiple_of(16) {
-                        buffer.push(0);
-                    }
-
-                    use xts_mode::get_tweak_default;
-                    let sector_size = 16;
-                    let sector_index = position / sector_size;
-                    cipher.encrypt_area(
-                        &mut buffer,
-                        sector_size as usize,
-                        sector_index as u128,
-                        get_tweak_default,
-                    );
-                    writer.write_all(&buffer)?;
-                }
-                writer
-            }
+            Self::AesXts256(aes_xts_256) => aes_xts_256.finish()?,
             #[cfg(feature = "encrypt-adiantum")]
-            Self::Adiantum {
-                mut writer, buffer, ..
-            } => {
-                if !buffer.is_empty() {
-                    // TODO: Implement actual Adiantum encryption - for now just pass through
-                    writer.write_all(&buffer)?;
-                }
-                writer
-            }
+            Self::Adiantum(adiantum) => adiantum.finish()?,
             #[cfg(feature = "encrypt-threefish")]
-            Self::Threefish {
-                mut writer,
-                cipher,
-                mut buffer,
-            } => {
-                if !buffer.is_empty() {
-                    // Pad to 128-byte boundary for Threefish-1024
-                    while !buffer.len().is_multiple_of(128) {
-                        buffer.push(0);
-                    }
-
-                    use threefish::cipher::generic_array::GenericArray;
-                    for chunk in buffer.chunks_mut(128) {
-                        if chunk.len() == 128 {
-                            let mut block = GenericArray::clone_from_slice(chunk);
-                            cipher.encrypt_block(&mut block);
-                            chunk.copy_from_slice(&block);
-                        }
-                    }
-                    writer.write_all(&buffer)?;
-                }
-                writer
-            }
-        }
-    }
-
-    #[throws(Error)]
-    pub fn finish(self) -> W {
-        match self {
-            Self::None(w) => w,
-            #[cfg(feature = "encrypt-xts")]
-            Self::AesXts256(w) => w.finish()?,
-            #[cfg(feature = "encrypt-adiantum")]
-            Self::Adiantum(w) => w.finish()?,
-            #[cfg(feature = "encrypt-threefish")]
-            Self::Threefish(w) => w.finish()?,
+            Self::Threefish(threefish_1024) => threefish_1024.finish()?,
         }
     }
 }
@@ -279,6 +214,7 @@ impl<W: Write> Write for Encryptor<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Self::None(w) => w.write(buf),
+            Self::Xor(w) => w.write(buf),
             #[cfg(feature = "encrypt-xts")]
             Self::AesXts256(w) => w.write(buf),
             #[cfg(feature = "encrypt-adiantum")]
@@ -291,6 +227,7 @@ impl<W: Write> Write for Encryptor<W> {
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Self::None(w) => w.flush(),
+            Self::Xor(w) => w.flush(),
             #[cfg(feature = "encrypt-xts")]
             Self::AesXts256(w) => w.flush(),
             #[cfg(feature = "encrypt-adiantum")]
@@ -302,14 +239,15 @@ impl<W: Write> Write for Encryptor<W> {
 }
 
 /// Decrypt data from the given reader.
-pub enum Decryptor<R: BufRead> {
+pub enum Decryptor<R: Read> {
     None(R),
+    Xor(R),
     #[cfg(feature = "encrypt-xts")]
-    AesXts256(DecryptingReader<R>),
+    AesXts256(aes_xts_256::AesXts256Reader<R>),
     #[cfg(feature = "encrypt-adiantum")]
-    Adiantum(DecryptingReader<R>),
+    Adiantum(adiantum::AdiantumReader<R>),
     #[cfg(feature = "encrypt-threefish")]
-    Threefish(DecryptingReader<R>),
+    Threefish(threefish_1024::ThreefishReader<R>),
 }
 
 impl<R: BufRead> Decryptor<R> {
@@ -317,47 +255,49 @@ impl<R: BufRead> Decryptor<R> {
     pub fn new(algorithm: EncryptionAlgorithm, reader: R, key: &[u8]) -> Self {
         match algorithm {
             EncryptionAlgorithm::None => Self::None(reader),
+            EncryptionAlgorithm::Xor => todo!(),
             EncryptionAlgorithm::AesXts256 => {
                 #[cfg(feature = "encrypt-xts")]
                 {
-                    Self::AesXts256(DecryptingReader::new_aes_xts_256(reader, key)?)
+                    Self::AesXts256(aes_xts_256::AesXts256Reader::new(reader, key)?)
                 }
                 #[cfg(not(feature = "encrypt-xts"))]
                 throw!(Error::UnsupportedEncryption(
-                    "AES-XTS-256 encryption not supported".to_string()
+                    "AES-XTS-256 encryption is not supported".to_string()
                 ))
             }
             EncryptionAlgorithm::Hctr2 => {
-                unimplemented!("HCTR2 decryption not yet implemented")
+                unimplemented!("HCTR2 decryption is not yet implemented")
             }
             EncryptionAlgorithm::Adiantum => {
                 #[cfg(feature = "encrypt-adiantum")]
                 {
-                    Self::Adiantum(DecryptingReader::new_adiantum(reader, key)?)
+                    Self::Adiantum(adiantum::AdiantumReader::new(reader, key)?)
                 }
                 #[cfg(not(feature = "encrypt-adiantum"))]
                 throw!(Error::UnsupportedEncryption(
-                    "Adiantum encryption not supported".to_string()
+                    "Adiantum encryption is not supported".to_string()
                 ))
             }
             EncryptionAlgorithm::Threefish1024 => {
                 #[cfg(feature = "encrypt-threefish")]
                 {
-                    Self::Threefish(DecryptingReader::new_threefish_1024(reader, key)?)
+                    Self::Threefish(threefish_1024::ThreefishReader::new(reader, key)?)
                 }
                 #[cfg(not(feature = "encrypt-threefish"))]
                 throw!(Error::UnsupportedEncryption(
-                    "Threefish-1024 encryption not supported".to_string()
+                    "Threefish-1024 encryption is not supported".to_string()
                 ))
             }
         }
     }
 }
 
-impl<R: BufRead> Read for Decryptor<R> {
+impl<R: Read> Read for Decryptor<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
             Self::None(r) => r.read(buf),
+            Self::Xor(r) => r.read(buf),
             #[cfg(feature = "encrypt-xts")]
             Self::AesXts256(r) => r.read(buf),
             #[cfg(feature = "encrypt-adiantum")]
@@ -401,89 +341,11 @@ pub fn decrypt_stream<R: BufRead>(
     Decryptor::new(algorithm, reader, key)?
 }
 
-//=========================
-//=========================
-//=========================
-
-impl<W: Write> Write for EncryptingWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self {
-            #[cfg(feature = "encrypt-xts")]
-            Self::AesXts256 {
-                writer,
-                cipher,
-                buffer,
-                position,
-            } => {
-                buffer.extend_from_slice(buf);
-
-                // Process complete 16-byte blocks
-                while buffer.len() >= 16 {
-                    let mut block = [0u8; 16];
-                    block.copy_from_slice(&buffer.drain(..16).collect::<Vec<_>>());
-
-                    use xts_mode::get_tweak_default;
-                    let tweak = get_tweak_default((*position / 16) as u128);
-                    cipher.encrypt_sector(&mut block, tweak);
-                    writer.write_all(&block)?;
-                    *position += 16;
-                }
-
-                Ok(buf.len())
-            }
-            #[cfg(feature = "encrypt-adiantum")]
-            Self::Adiantum { writer, buffer, .. } => {
-                // TODO: Implement actual Adiantum streaming encryption
-                // For now, just pass through data
-                buffer.extend_from_slice(buf);
-                if buffer.len() >= 16 {
-                    let to_write = buffer.drain(..16).collect::<Vec<_>>();
-                    writer.write_all(&to_write)?;
-                }
-                Ok(buf.len())
-            }
-            #[cfg(feature = "encrypt-threefish")]
-            Self::Threefish {
-                writer,
-                cipher,
-                buffer,
-            } => {
-                buffer.extend_from_slice(buf);
-
-                // Process complete 128-byte blocks
-                while buffer.len() >= 128 {
-                    let mut block = [0u8; 128];
-                    block.copy_from_slice(&buffer.drain(..128).collect::<Vec<_>>());
-
-                    use threefish::cipher::generic_array::GenericArray;
-                    let mut ga_block = GenericArray::clone_from_slice(&block);
-                    cipher.encrypt_block(&mut ga_block);
-                    block.copy_from_slice(&ga_block);
-                    writer.write_all(&block)?;
-                }
-
-                Ok(buf.len())
-            }
-        }
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        match self {
-            #[cfg(feature = "encrypt-xts")]
-            Self::AesXts256 { writer, .. } => writer.flush(),
-            #[cfg(feature = "encrypt-adiantum")]
-            Self::Adiantum { writer, .. } => writer.flush(),
-            #[cfg(feature = "encrypt-threefish")]
-            Self::Threefish { writer, .. } => writer.flush(),
-        }
-    }
-}
-
 //===========================
 //===========================
 //===========================
 
-impl<R: BufRead> DecryptingReader<R> {
+impl<R: BufRead> Decryptor<R> {
     #[cfg(feature = "encrypt-xts")]
     #[throws(Error)]
     fn new_aes_xts_256(reader: R, key: &[u8]) -> Self {
@@ -500,90 +362,6 @@ impl<R: BufRead> DecryptingReader<R> {
     #[throws(Error)]
     fn new_threefish_1024(reader: R, key: &[u8]) -> Self {
         Self::Threefish(threefish_1024::ThreefishReader::new(reader, key)?)
-    }
-}
-
-impl<R: BufRead> Read for DecryptingReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            #[cfg(feature = "encrypt-xts")]
-            Self::AesXts256 {
-                reader,
-                cipher,
-                buffer,
-                position,
-            } => {
-                if buffer.is_empty() {
-                    // Read and decrypt a block
-                    let mut encrypted_block = [0u8; 16];
-                    match reader.read_exact(&mut encrypted_block) {
-                        Ok(()) => {
-                            use xts_mode::get_tweak_default;
-                            let tweak = get_tweak_default((*position / 16) as u128);
-                            cipher.decrypt_sector(&mut encrypted_block, tweak);
-                            buffer.extend_from_slice(&encrypted_block);
-                            *position += 16;
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                            return Ok(0);
-                        }
-                        Err(e) => return Err(e),
-                    }
-                }
-
-                let bytes_to_copy = buf.len().min(buffer.len());
-                buf[..bytes_to_copy]
-                    .copy_from_slice(&buffer.drain(..bytes_to_copy).collect::<Vec<_>>());
-                Ok(bytes_to_copy)
-            }
-            #[cfg(feature = "encrypt-adiantum")]
-            Self::Adiantum { reader, buffer, .. } => {
-                // TODO: Implement actual Adiantum decryption - for now just pass through
-                if buffer.is_empty() {
-                    let mut data = vec![0u8; buf.len()];
-                    match reader.read(&mut data) {
-                        Ok(n) => {
-                            buffer.extend_from_slice(&data[..n]);
-                        }
-                        Err(e) => return Err(e),
-                    }
-                }
-
-                let bytes_to_copy = buf.len().min(buffer.len());
-                buf[..bytes_to_copy]
-                    .copy_from_slice(&buffer.drain(..bytes_to_copy).collect::<Vec<_>>());
-                Ok(bytes_to_copy)
-            }
-            #[cfg(feature = "encrypt-threefish")]
-            Self::Threefish {
-                reader,
-                cipher,
-                buffer,
-            } => {
-                if buffer.is_empty() {
-                    // Read and decrypt a block
-                    let mut encrypted_block = [0u8; 128];
-                    match reader.read_exact(&mut encrypted_block) {
-                        Ok(()) => {
-                            use threefish::cipher::generic_array::GenericArray;
-                            let mut block = GenericArray::clone_from_slice(&encrypted_block);
-                            cipher.decrypt_block(&mut block);
-                            encrypted_block.copy_from_slice(&block);
-                            buffer.extend_from_slice(&encrypted_block);
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                            return Ok(0);
-                        }
-                        Err(e) => return Err(e),
-                    }
-                }
-
-                let bytes_to_copy = buf.len().min(buffer.len());
-                buf[..bytes_to_copy]
-                    .copy_from_slice(&buffer.drain(..bytes_to_copy).collect::<Vec<_>>());
-                Ok(bytes_to_copy)
-            }
-        }
     }
 }
 

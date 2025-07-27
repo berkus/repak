@@ -5,8 +5,8 @@
 use {
     crate::{
         checksum::{ChecksumHeader, Checksummer, ChecksummingRead},
-        compress::*,
-        encrypt::*,
+        compress::{CompressionHeader, compress_stream},
+        encrypt::EncryptionHeader,
         io::Deser,
     },
     byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt},
@@ -419,7 +419,7 @@ impl REPAK {
             encryption: encryption_header,
             compression: compression_header,
             checksum: checksum_header,
-            // path: file.to_owned(), // Store original source file path
+            path: file.to_owned(), // Store original source file path
         };
 
         self.last_insertion_offset += entry.size;
@@ -446,9 +446,9 @@ impl REPAK {
             let infile = BufReader::new(File::open(entry.path.clone())?);
 
             // Set up checksumming if needed
-            let mut checksummer = match &entry.checksum {
+            let checksummer = match &entry.checksum {
                 None => ChecksummingRead::new(infile, vec![]),
-                Some(ch) => {
+                Some(_ch) => {
                     // Convert Checksum enum instances to boxed Checksummer trait objects
                     // This would need proper implementation based on how Checksum works
                     let checksummers: Vec<Box<dyn Checksummer>> = vec![];
@@ -457,19 +457,20 @@ impl REPAK {
             };
 
             // Handle compression if needed
-            let mut reader: Box<dyn Read> = match entry.compression {
-                None => Box::new(checksummer),
+            let reader: Box<dyn Read> = match entry.compression {
                 Some(CompressionHeader {
                     algorithm: CompressionAlgorithm::Deflate,
                     ..
                 }) => {
-                    #[cfg(feature = "flate2")]
+                    #[cfg(feature = "compress-deflate")]
                     {
                         // Create a BufReader wrapper since Compressor expects BufRead
-                        let buf_reader = BufReader::new(checksummer);
-                        Box::new(Compressor::deflate(buf_reader))
+                        // TODO:
+                        // let buf_reader = BufReader::new(checksummer);
+                        // Box::new(Compressor::deflate(buf_reader))
+                        Box::new(checksummer)
                     }
-                    #[cfg(not(feature = "flate2"))]
+                    #[cfg(not(feature = "compress-deflate"))]
                     {
                         Box::new(checksummer)
                     }
@@ -478,12 +479,7 @@ impl REPAK {
             };
 
             // Apply encryption if needed
-            reader = match &entry.encryption {
-                None => reader,
-                Some(EncryptionHeader {
-                    algorithm: EncryptionAlgorithm::None,
-                    ..
-                }) => reader,
+            let _reader = match &entry.encryption {
                 Some(EncryptionHeader {
                     algorithm: EncryptionAlgorithm::Xor,
                     ..
@@ -497,8 +493,9 @@ impl REPAK {
             };
 
             // Write to pakfile
-            pakfile.seek(SeekFrom::Start(entry.offset))?;
-            copy(&mut reader, &mut pakfile)?;
+            // TODO:
+            // pakfile.seek(SeekFrom::Start(entry.offset))?;
+            // copy(&mut reader, &mut pakfile)?;
 
             // @todo: update checksummer and encryptor output metadata in the index
             // entry.checksums = checksums;
@@ -712,6 +709,8 @@ struct IndexEntry {
     encryption: Option<EncryptionHeader>,
     compression: Option<CompressionHeader>,
     checksum: Option<ChecksumHeader>,
+
+    path: PathBuf,
 }
 
 impl Ser for IndexEntry {
@@ -763,10 +762,11 @@ impl Deser for IndexEntry {
         Self {
             offset,
             size,
-            name,
+            name: name.clone(),
             encryption,
             compression,
             checksum,
+            path: PathBuf::from(name),
         }
     }
 }
