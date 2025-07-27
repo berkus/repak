@@ -186,19 +186,7 @@ impl<W: Write> Encryptor<W> {
     #[cfg(feature = "encrypt-adiantum")]
     #[throws(Error)]
     fn new_adiantum(writer: W, key: &[u8]) -> Self {
-        if key.len() != 32 {
-            throw!(Error::UnsupportedEncryption(
-                "Adiantum requires 32-byte key".to_string()
-            ));
-        }
-
-        // TODO: Implement proper Adiantum encryption with ChaCha20 and AES
-        // For now, just pass through data without encryption
-        Self::Adiantum(Adiantum {
-            writer,
-            buffer: Vec::new(),
-            nonce_counter: 0,
-        })
+        Self::Adiantum(adiantum::AdiantumWriter::new(writer, key)?)
     }
 
     #[cfg(feature = "encrypt-threefish")]
@@ -518,19 +506,7 @@ impl<R: BufRead> DecryptingReader<R> {
     #[cfg(feature = "encrypt-adiantum")]
     #[throws(Error)]
     fn new_adiantum(reader: R, key: &[u8]) -> Self {
-        if key.len() != 32 {
-            throw!(Error::UnsupportedEncryption(
-                "Adiantum requires 32-byte key".to_string()
-            ));
-        }
-
-        // TODO: Implement proper Adiantum decryption with ChaCha20 and AES
-        // For now, just pass through data without decryption
-        Self::Adiantum {
-            reader,
-            buffer: Vec::new(),
-            nonce_counter: 0,
-        }
+        Self::Adiantum(adiantum::AdiantumReader::new(reader, key)?)
     }
 
     #[cfg(feature = "encrypt-threefish")]
