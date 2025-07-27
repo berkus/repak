@@ -6,12 +6,12 @@ use {
 
 pub trait Ser {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write);
+    fn ser(&self, w: &mut impl Write); //->io::Result<()>?
 }
 
 pub trait Deser: Sized {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self;
+    fn deser(r: &mut impl Read) -> Self; //Result<Self> where Self: Sized;
 }
 
 // Calculate written size of an unsigned leb128 representation.
@@ -30,7 +30,7 @@ pub(crate) fn ser_string(w: &mut impl Write, str: &str) {
 #[throws(Error)]
 pub(crate) fn deser_string(r: &mut impl Read) -> String {
     let name_len = leb128::read::unsigned(r)?;
-    let mut data = vec![0; usize::try_from(name_len)?]; // Attack vec: too long string
+    let mut data = vec![0; usize::try_from(name_len)?]; // Attack vector: too long string
     r.read_exact(&mut data)?;
     String::from_utf8(data)?
 }

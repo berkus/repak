@@ -4,9 +4,9 @@
 
 use {
     crate::{
-        checksum::ChecksumHeader,
-        compress::{CompressionHeader, compress_stream},
-        encrypt::EncryptionHeader,
+        checksum::{ChecksumHeader, Checksummer, ChecksummingRead},
+        compress::*,
+        encrypt::*,
         io::Deser,
     },
     byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt},
@@ -443,6 +443,65 @@ impl REPAK {
 
         for entry in sorted {
             println!("Sorted Entry: {entry:?}");
+            let infile = BufReader::new(File::open(entry.path.clone())?);
+
+            // Set up checksumming if needed
+            let mut checksummer = match &entry.checksum {
+                None => ChecksummingRead::new(infile, vec![]),
+                Some(ch) => {
+                    // Convert Checksum enum instances to boxed Checksummer trait objects
+                    // This would need proper implementation based on how Checksum works
+                    let checksummers: Vec<Box<dyn Checksummer>> = vec![];
+                    ChecksummingRead::new(infile, checksummers)
+                }
+            };
+
+            // Handle compression if needed
+            let mut reader: Box<dyn Read> = match entry.compression {
+                None => Box::new(checksummer),
+                Some(CompressionHeader {
+                    algorithm: CompressionAlgorithm::Deflate,
+                    ..
+                }) => {
+                    #[cfg(feature = "flate2")]
+                    {
+                        // Create a BufReader wrapper since Compressor expects BufRead
+                        let buf_reader = BufReader::new(checksummer);
+                        Box::new(Compressor::deflate(buf_reader))
+                    }
+                    #[cfg(not(feature = "flate2"))]
+                    {
+                        Box::new(checksummer)
+                    }
+                }
+                _ => Box::new(checksummer),
+            };
+
+            // Apply encryption if needed
+            reader = match &entry.encryption {
+                None => reader,
+                Some(EncryptionHeader {
+                    algorithm: EncryptionAlgorithm::None,
+                    ..
+                }) => reader,
+                Some(EncryptionHeader {
+                    algorithm: EncryptionAlgorithm::Xor,
+                    ..
+                }) => {
+                    // Since Encryptor expects BufRead, we need to wrap in BufReader
+                    let buf_reader = BufReader::new(reader);
+                    // Not properly implemented yet
+                    Box::new(buf_reader)
+                }
+                _ => reader,
+            };
+
+            // Write to pakfile
+            pakfile.seek(SeekFrom::Start(entry.offset))?;
+            copy(&mut reader, &mut pakfile)?;
+
+            // @todo: update checksummer and encryptor output metadata in the index
+            // entry.checksums = checksums;
         }
 
         // Write the index to the archive file
