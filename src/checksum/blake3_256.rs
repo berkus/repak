@@ -1,7 +1,7 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser},
+        io::{Load, Save},
     },
     culpa::{throw, throws},
     std::io::{Read, Write},
@@ -33,8 +33,8 @@ fn test_blake3_256_checksummer() {
 
     // Test serialization/deserialization
     let mut buffer = Vec::new();
-    blake3.ser(&mut buffer).unwrap();
-    let deserialized = BLAKE3::deser(&mut Cursor::new(buffer)).unwrap();
+    blake3.save(&mut buffer).unwrap();
+    let deserialized = BLAKE3::load(&mut Cursor::new(buffer)).unwrap();
     assert_eq!(blake3.digest, deserialized.digest);
 }
 
@@ -61,17 +61,18 @@ impl Default for BLAKE3 {
     }
 }
 
-impl Ser for BLAKE3 {
+// this is for saving the HASH itself, not for passing data through it...
+impl Save for BLAKE3 {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         leb128::write::unsigned(w, 32)?;
         w.write_all(&self.digest)?;
     }
 }
 
-impl Deser for BLAKE3 {
+impl Load for BLAKE3 {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 32 {
             throw!(Error::Deser(format!("Invalid BLAKE3 digest size: {size}")));

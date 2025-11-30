@@ -1,7 +1,7 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser},
+        io::{Load, Save},
     },
     culpa::{throw, throws},
     std::io::{Read, Write},
@@ -55,23 +55,23 @@ impl ChecksumHeader {
     }
 }
 
-impl Ser for ChecksumHeader {
+impl Save for ChecksumHeader {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         leb128::write::unsigned(w, self.checksums.len() as u64)?;
         for c in &self.checksums {
-            c.ser(w)?;
+            c.save(w)?;
         }
     }
 }
 
-impl Deser for ChecksumHeader {
+impl Load for ChecksumHeader {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let count = leb128::read::unsigned(r)?;
         let mut checksums = Vec::with_capacity(usize::try_from(count)?);
         for _ in 0..count {
-            checksums.push(Checksum::deser(r)?);
+            checksums.push(Checksum::load(r)?);
         }
         Self { checksums }
     }
@@ -99,9 +99,9 @@ impl Checksum {
     }
 }
 
-impl Ser for Checksum {
+impl Save for Checksum {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         leb128::write::unsigned(
             w,
             match self {
@@ -121,38 +121,38 @@ impl Ser for Checksum {
         )?;
         match self {
             #[cfg(feature = "checksum-sha3")]
-            Checksum::SHA3(sha3) => sha3.ser(w)?,
+            Checksum::SHA3(sha3) => sha3.save(w)?,
             #[cfg(feature = "checksum-k12")]
-            Checksum::K12(k12) => k12.ser(w)?,
+            Checksum::K12(k12) => k12.save(w)?,
             #[cfg(feature = "checksum-blake3")]
-            Checksum::BLAKE3(blake3) => blake3.ser(w)?,
+            Checksum::BLAKE3(blake3) => blake3.save(w)?,
             #[cfg(feature = "checksum-xxhash3")]
-            Checksum::Xxhash3(xxhash3) => xxhash3.ser(w)?,
+            Checksum::Xxhash3(xxhash3) => xxhash3.save(w)?,
             #[cfg(feature = "checksum-seahash")]
-            Checksum::SeaHash(seahash) => seahash.ser(w)?,
+            Checksum::SeaHash(seahash) => seahash.save(w)?,
             #[cfg(feature = "checksum-cityhash")]
-            Checksum::CityHash(cityhash) => cityhash.ser(w)?,
+            Checksum::CityHash(cityhash) => cityhash.save(w)?,
         }
     }
 }
 
-impl Deser for Checksum {
+impl Load for Checksum {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let kind = leb128::read::unsigned(r)?;
         match kind {
             #[cfg(feature = "checksum-sha3")]
-            1 => Checksum::SHA3(SHA3::deser(r)?),
+            1 => Checksum::SHA3(SHA3::load(r)?),
             #[cfg(feature = "checksum-k12")]
-            2 => Checksum::K12(K12::deser(r)?),
+            2 => Checksum::K12(K12::load(r)?),
             #[cfg(feature = "checksum-blake3")]
-            3 => Checksum::BLAKE3(BLAKE3::deser(r)?),
+            3 => Checksum::BLAKE3(BLAKE3::load(r)?),
             #[cfg(feature = "checksum-xxhash3")]
-            4 => Checksum::Xxhash3(Xxhash3::deser(r)?),
+            4 => Checksum::Xxhash3(Xxhash3::load(r)?),
             #[cfg(feature = "checksum-seahash")]
-            5 => Checksum::SeaHash(SeaHash::deser(r)?),
+            5 => Checksum::SeaHash(SeaHash::load(r)?),
             #[cfg(feature = "checksum-cityhash")]
-            6 => Checksum::CityHash(CityHash::deser(r)?),
+            6 => Checksum::CityHash(CityHash::load(r)?),
             _ => throw!(Error::UnsupportedChecksum(format!(
                 "Unknown kind: {kind}. If it is one of the standard checksum kinds, check your library is compiled with corresponding checksum-* feature enabled."
             ))),

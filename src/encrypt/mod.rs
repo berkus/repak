@@ -36,7 +36,7 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser, leb128_usize},
+        io::{Load, Save, leb128_usize},
     },
     culpa::{throw, throws},
     std::io::{BufRead, Read, Write},
@@ -91,9 +91,9 @@ impl EncryptionHeader {
     }
 }
 
-impl Ser for EncryptionHeader {
+impl Save for EncryptionHeader {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         // Calculate total size: algorithm_id + parameters_len + parameters
         let algorithm_id_size = leb128_usize(self.algorithm.into())?;
         let params_len_size = leb128_usize(self.parameters.len() as u64)?;
@@ -106,9 +106,9 @@ impl Ser for EncryptionHeader {
     }
 }
 
-impl Deser for EncryptionHeader {
+impl Load for EncryptionHeader {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let algorithm = EncryptionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
         let params_len = leb128::read::unsigned(r)?;
         let mut parameters = vec![0u8; usize::try_from(params_len)?];
@@ -383,10 +383,10 @@ mod tests {
     fn test_encryption_header_serialization() {
         let header = EncryptionHeader::new(EncryptionAlgorithm::AesXts256);
         let mut buffer = Vec::new();
-        header.ser(&mut buffer).unwrap();
+        header.save(&mut buffer).unwrap();
 
         let mut cursor = Cursor::new(buffer);
-        let deserialized = EncryptionHeader::deser(&mut cursor).unwrap();
+        let deserialized = EncryptionHeader::load(&mut cursor).unwrap();
 
         assert!(matches!(
             deserialized.algorithm,
@@ -399,10 +399,10 @@ mod tests {
     fn test_threefish_header_with_block_size() {
         let header = EncryptionHeader::new_threefish(512);
         let mut buffer = Vec::new();
-        header.ser(&mut buffer).unwrap();
+        header.save(&mut buffer).unwrap();
 
         let mut cursor = Cursor::new(buffer);
-        let deserialized = EncryptionHeader::deser(&mut cursor).unwrap();
+        let deserialized = EncryptionHeader::load(&mut cursor).unwrap();
 
         assert!(matches!(
             deserialized.algorithm,

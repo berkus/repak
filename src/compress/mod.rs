@@ -1,7 +1,7 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser, leb128_usize},
+        io::{Load, Save, leb128_usize},
     },
     culpa::{throw, throws},
     std::io::{Read, Write},
@@ -32,9 +32,9 @@ impl CompressionHeader {
     }
 }
 
-impl Ser for CompressionHeader {
+impl Save for CompressionHeader {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         // Calculate total size: algorithm_id + decompressed_size
         let algorithm_id_size = leb128_usize(self.algorithm.into())?;
         let decompressed_size_size = leb128_usize(self.decompressed_size)?;
@@ -47,9 +47,9 @@ impl Ser for CompressionHeader {
     }
 }
 
-impl Deser for CompressionHeader {
+impl Load for CompressionHeader {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let _total_size = leb128::read::unsigned(r)?;
         let algorithm = CompressionAlgorithm::try_from(leb128::read::unsigned(r)?)?;
         let decompressed_size = leb128::read::unsigned(r)?;

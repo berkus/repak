@@ -1,7 +1,7 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser, deser_string, ser_string},
+        io::{Load, Save, load_string, save_string},
     },
     culpa::throws,
     std::io::{Read, Write},
@@ -49,8 +49,8 @@ fn test_k12_256_checksummer() {
 
     // Test serialization/deserialization
     let mut buffer = Vec::new();
-    k12.ser(&mut buffer).unwrap();
-    let deserialized = K12::deser(&mut Cursor::new(buffer)).unwrap();
+    k12.save(&mut buffer).unwrap();
+    let deserialized = K12::load(&mut Cursor::new(buffer)).unwrap();
     assert_eq!(k12.primer, deserialized.primer);
     assert_eq!(k12.digest, deserialized.digest);
 }
@@ -81,18 +81,18 @@ impl K12 {
     }
 }
 
-impl Ser for K12 {
+impl Save for K12 {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        ser_string(w, &self.primer)?;
+    fn save(&self, w: &mut impl Write) {
+        save_string(w, &self.primer)?;
         w.write_all(&self.digest)?;
     }
 }
 
-impl Deser for K12 {
+impl Load for K12 {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        let primer = deser_string(r)?;
+    fn load(r: &mut impl Read) -> Self {
+        let primer = load_string(r)?;
         let mut digest = [0u8; 32];
         r.read_exact(&mut digest)?;
         Self {

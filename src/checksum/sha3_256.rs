@@ -1,7 +1,7 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser},
+        io::{Load, Save},
     },
     culpa::{throw, throws},
     std::io::{Read, Write},
@@ -34,8 +34,8 @@ fn test_sha3_256_checksummer() {
 
     // Test serialization/deserialization
     let mut buffer = Vec::new();
-    sha3.ser(&mut buffer).unwrap();
-    let deserialized = SHA3::deser(&mut Cursor::new(buffer)).unwrap();
+    sha3.save(&mut buffer).unwrap();
+    let deserialized = SHA3::load(&mut Cursor::new(buffer)).unwrap();
     assert_eq!(sha3.digest, deserialized.digest);
 }
 
@@ -62,17 +62,17 @@ impl Default for SHA3 {
     }
 }
 
-impl Ser for SHA3 {
+impl Save for SHA3 {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         leb128::write::unsigned(w, 32)?;
         w.write_all(&self.digest)?;
     }
 }
 
-impl Deser for SHA3 {
+impl Load for SHA3 {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 32 {
             throw!(Error::Deser(format!("Invalid SHA3 digest size: {size}")));

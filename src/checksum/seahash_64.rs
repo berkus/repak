@@ -1,7 +1,7 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser},
+        io::{Load, Save},
     },
     core::hash::Hasher,
     culpa::{throw, throws},
@@ -31,8 +31,8 @@ fn test_seahash_64_checksummer() {
 
     // Test serialization/deserialization
     let mut buffer = Vec::new();
-    seahash.ser(&mut buffer).unwrap();
-    let deserialized = SeaHash::deser(&mut Cursor::new(buffer)).unwrap();
+    seahash.save(&mut buffer).unwrap();
+    let deserialized = SeaHash::load(&mut Cursor::new(buffer)).unwrap();
     assert_eq!(seahash.digest, deserialized.digest);
 }
 
@@ -50,17 +50,17 @@ impl std::fmt::Debug for SeaHash {
     }
 }
 
-impl Ser for SeaHash {
+impl Save for SeaHash {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         leb128::write::unsigned(w, 8)?;
         w.write_all(&self.digest)?;
     }
 }
 
-impl Deser for SeaHash {
+impl Load for SeaHash {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 8 {
             throw!(Error::Deser(format!("Invalid SeaHash digest size: {size}")));

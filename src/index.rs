@@ -4,7 +4,7 @@ use {
         checksum::ChecksumHeader,
         compress::CompressionHeader,
         encrypt::EncryptionHeader,
-        io::{Deser, Ser, deser_string, ser_string},
+        io::{Load, Save, load_string, save_string},
     },
     byteorder::{ReadBytesExt, WriteBytesExt},
     culpa::{throw, throws},
@@ -32,14 +32,14 @@ impl IndexHeader {
     }
 }
 
-impl Ser for IndexHeader {
+impl Save for IndexHeader {
     // Serialize the index. If zstd compression is needed, pass a compressing writer as `w`.
     // Checksumming will be enabled automatically based on the selected checksumming options.
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         w.write_all(b"REPAK")?;
         leb128::write::unsigned(w, 0x1)?; // Version 1
-        self.checksum.ser(w)?; // need to run checksum calculations first...
+        self.checksum.save(w)?; // need to run checksum calculations first...
 
         let w = self.checksum.build_ingress_pipeline(w);
 
@@ -53,14 +53,14 @@ impl Ser for IndexHeader {
 
         for entry in &mut sorted {
             eprintln!("Entry: {entry:?}");
-            entry.ser(w)?;
+            entry.save(w)?;
         }
     }
 }
 
-impl Deser for IndexHeader {
+impl Load for IndexHeader {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let mut buf = [0u8; 5];
         r.read_exact(&mut buf)?; // peek exact!
         // if first four bytes are "0x28, 0xB5, 0x2F, 0xFD" then it's `zstd` compressed
@@ -81,7 +81,7 @@ impl Deser for IndexHeader {
             )));
         }
 
-        let checksum = ChecksumHeader::deser(r)?;
+        let checksum = ChecksumHeader::load(r)?;
 
         // wrap r into a ChecksummingRead with selected checksummers, verify the integrity of the index
         // @todo checksumming reader starting from here
@@ -91,7 +91,7 @@ impl Deser for IndexHeader {
         let mut entries = BTreeMap::new();
         // entries.extend_reserve(count);
         for _ in 0..count {
-            let entry = IndexEntry::deser(r)?;
+            let entry = IndexEntry::load(r)?;
             entries.insert((entry.name.clone(), entry.attributes.clone()), entry);
         }
 
@@ -116,9 +116,9 @@ pub struct IndexEntry {
     path: PathBuf,
 }
 
-impl Ser for IndexEntry {
+impl Save for IndexEntry {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         let flags = u64::from(self.encryption.is_some())
             | (u64::from(self.compression.is_some()) << 1)
             | (u64::from(self.checksum.is_some()) << 2);
@@ -126,40 +126,40 @@ impl Ser for IndexEntry {
         leb128::write::unsigned(w, self.offset)?;
         leb128::write::unsigned(w, self.size)?;
         leb128::write::unsigned(w, flags)?;
-        ser_string(w, &self.name)?;
-        self.attributes.ser(w)?;
+        save_string(w, &self.name)?;
+        self.attributes.save(w)?;
         if let Some(encryption) = &self.encryption {
-            encryption.ser(w)?;
+            encryption.save(w)?;
         }
         if let Some(compression) = &self.compression {
-            compression.ser(w)?;
+            compression.save(w)?;
         }
         if let Some(checksum) = &self.checksum {
-            checksum.ser(w)?;
+            checksum.save(w)?;
         }
     }
 }
 
-impl Deser for IndexEntry {
+impl Load for IndexEntry {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let offset = leb128::read::unsigned(r)?;
         let size = leb128::read::unsigned(r)?;
         let flags = leb128::read::unsigned(r)?;
-        let name = deser_string(r)?;
-        let attributes = Vec::<Attribute>::deser(r)?;
+        let name = load_string(r)?;
+        let attributes = Vec::<Attribute>::load(r)?;
         let encryption = if flags & 0x0001 != 0 {
-            Some(EncryptionHeader::deser(r)?)
+            Some(EncryptionHeader::load(r)?)
         } else {
             None
         };
         let compression = if flags & 0x0002 != 0 {
-            Some(CompressionHeader::deser(r)?)
+            Some(CompressionHeader::load(r)?)
         } else {
             None
         };
         let checksum = if flags & 0x0004 != 0 {
-            Some(ChecksumHeader::deser(r)?)
+            Some(ChecksumHeader::load(r)?)
         } else {
             None
         };
@@ -183,19 +183,19 @@ pub struct Attribute {
     value: Vec<u8>,
 }
 
-impl Ser for Attribute {
+impl Save for Attribute {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        ser_string(w, &self.key)?;
+    fn save(&self, w: &mut impl Write) {
+        save_string(w, &self.key)?;
         leb128::write::unsigned(w, u64::try_from(self.value.len())?)?;
         w.write_all(&self.value);
     }
 }
 
-impl Deser for Attribute {
+impl Load for Attribute {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        let key = deser_string(r)?;
+    fn load(r: &mut impl Read) -> Self {
+        let key = load_string(r)?;
         let len = leb128::read::unsigned(r)?;
         let mut value = vec![0; usize::try_from(len)?]; // Attack vector: too long array
         r.read_exact(&mut value)?;

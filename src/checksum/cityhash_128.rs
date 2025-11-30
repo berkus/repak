@@ -1,7 +1,7 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser},
+        io::{Load, Save},
     },
     core::hash::Hasher,
     culpa::{throw, throws},
@@ -37,8 +37,8 @@ fn test_cityhash_128_checksummer() {
 
     // Test serialization/deserialization
     let mut buffer = Vec::new();
-    cityhash.ser(&mut buffer).unwrap();
-    let deserialized = CityHash::deser(&mut Cursor::new(buffer)).unwrap();
+    cityhash.save(&mut buffer).unwrap();
+    let deserialized = CityHash::load(&mut Cursor::new(buffer)).unwrap();
     assert_eq!(cityhash.digest, deserialized.digest);
 }
 
@@ -51,17 +51,17 @@ pub struct CityHash {
     digest: [u8; 16],
 }
 
-impl Ser for CityHash {
+impl Save for CityHash {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         leb128::write::unsigned(w, 16)?;
         w.write_all(&self.digest)?;
     }
 }
 
-impl Deser for CityHash {
+impl Load for CityHash {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 16 {
             throw!(Error::Deser(format!(

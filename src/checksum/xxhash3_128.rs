@@ -1,7 +1,7 @@
 use {
     crate::{
         Error,
-        io::{Deser, Ser},
+        io::{Load, Save},
     },
     culpa::{throw, throws},
     std::io::{Read, Write},
@@ -33,8 +33,8 @@ fn test_xxhash3_128_checksummer() {
 
     // Test serialization/deserialization
     let mut buffer = Vec::new();
-    xxhash3.ser(&mut buffer).unwrap();
-    let deserialized = Xxhash3::deser(&mut Cursor::new(buffer)).unwrap();
+    xxhash3.save(&mut buffer).unwrap();
+    let deserialized = Xxhash3::load(&mut Cursor::new(buffer)).unwrap();
     assert_eq!(xxhash3.digest, deserialized.digest);
 }
 
@@ -61,17 +61,17 @@ impl Default for Xxhash3 {
     }
 }
 
-impl Ser for Xxhash3 {
+impl Save for Xxhash3 {
     #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
+    fn save(&self, w: &mut impl Write) {
         leb128::write::unsigned(w, 16)?;
         w.write_all(&self.digest)?;
     }
 }
 
-impl Deser for Xxhash3 {
+impl Load for Xxhash3 {
     #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
+    fn load(r: &mut impl Read) -> Self {
         let size = leb128::read::unsigned(r)?;
         if size != 16 {
             throw!(Error::Deser(format!("Invalid Xxhash3 digest size: {size}")));

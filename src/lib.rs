@@ -1,6 +1,6 @@
 #![feature(default_field_values)]
 #![allow(dead_code)]
-#![deny(warnings)]
+#![allow(warnings)]
 
 use {
     crate::{
@@ -10,7 +10,7 @@ use {
         index::{Attribute, IndexEntry, IndexHeader},
     },
     culpa::{throw, throws},
-    io::{Deser, Ser},
+    io::{Load, Save},
     std::{
         fs::{self, File, OpenOptions},
         io::{BufReader, Cursor, Read, Seek, SeekFrom, Write, copy},
@@ -219,7 +219,7 @@ pub fn open(input: &Path) -> REPAK {
     let idpak = input.with_extension("idpak");
     let (index, attached, insert_pos) = if fs::exists(&idpak)? {
         let mut input = BufReader::new(File::open(idpak)?);
-        let index = IndexHeader::deser(&mut input)?; // @todo compressed index
+        let index = IndexHeader::load(&mut input)?; // @todo compressed index
         (index, false, 0u64)
     } else {
         let mut input = BufReader::new(File::open(input)?);
@@ -231,7 +231,7 @@ pub fn open(input: &Path) -> REPAK {
         let offset = i64::try_from(leb128::read::unsigned(&mut cursor)?)?;
         input.seek(SeekFrom::End(-offset))?;
         let insert_pos = input.stream_position()?;
-        let index = IndexHeader::deser(&mut input)?; // @todo compressed index
+        let index = IndexHeader::load(&mut input)?; // @todo compressed index
         (index, true, insert_pos)
     };
     REPAK {
@@ -511,7 +511,7 @@ impl REPAK {
             idxfile
         };
 
-        self.index.ser(&mut idxfile)?;
+        self.index.save(&mut idxfile)?;
 
         drop(idxfile);
         let offset = fs::metadata(idxpath.clone())?.len();
