@@ -108,7 +108,4 @@ impl TryFrom<u64> for CompressionAlgorithm {
 mod compressor;
 mod decompressor;
 
-pub use {
-    compressor::{compress_stream, pick_best_compression},
-    decompressor::decompress_stream,
-};
+pub use {compressor::pick_best_compression, decompressor::decompress_stream};

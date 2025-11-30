@@ -28,7 +28,7 @@ pub struct IndexHeader {
 impl IndexHeader {
     #[throws]
     pub fn lookup(&self, id: impl AsRef<str>, attributes: &[Attribute]) -> Option<&IndexEntry> {
-        self.entries.get((id.as_ref(), attributes))
+        self.entries.get((id.as_ref(), attributes.to_vec()))
     }
 }
 
@@ -38,7 +38,7 @@ impl Ser for IndexHeader {
     #[throws(Error)]
     fn ser(&self, w: &mut impl Write) {
         w.write_all(b"REPAK")?;
-        w.write_u8(0x1)?; // Version 1
+        leb128::write::unsigned(w, 0x1)?; // Version 1
         self.checksum.ser(w)?; // need to run checksum calculations first...
 
         let w = self.checksum.build_ingress_pipeline(w);
