@@ -1,3 +1,5 @@
+!! Need small testable chunks of functionality, lets go.
+
 - [x] copy assets to data file
 
 - [ ] read index
