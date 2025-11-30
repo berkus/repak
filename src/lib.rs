@@ -16,7 +16,7 @@ use {
         io::{BufReader, Cursor, Read, Seek, SeekFrom, Write, copy},
         path::{Path, PathBuf},
     },
-    zstd::bulk::Compressor,
+    zstd::bulk as zstd,
 };
 
 mod checksum;
@@ -26,6 +26,8 @@ mod encrypt;
 mod index;
 mod io;
 mod locator;
+mod read;
+mod write;
 
 pub use {
     checksum::Checksum,
@@ -33,6 +35,7 @@ pub use {
     encrypt::EncryptionAlgorithm,
 };
 
+// TODO: enum ErrorKind here?
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("File I/O error: {0}")]
@@ -83,7 +86,7 @@ pub enum Error {
 /// use std::path::Path;
 ///
 /// // Create a new archive
-/// let mut archive = create(Path::new("assets.repak")).unwrap();
+/// let mut archive = create("assets.repak").unwrap();
 ///
 /// // Add a file with default options
 /// archive.append(
@@ -103,11 +106,14 @@ pub enum Error {
 /// archive.save().unwrap();
 /// ```
 pub struct REPAK {
-    index: IndexHeader,
-    #[expect(dead_code)]
-    index_attached: bool,
+    index: IndexAttachment,
     file_path: PathBuf,
     last_insertion_offset: u64,
+}
+
+enum IndexAttachment {
+    Attached(IndexHeader),
+    Detached(IndexHeader, PathBuf),
 }
 
 /// Reference to a single resource in the archive.
@@ -242,6 +248,8 @@ pub fn open(input: &Path) -> REPAK {
     }
 }
 
+type EntryIndex = u64;
+
 /// Source of the asset data
 #[expect(dead_code)]
 enum Source {
@@ -250,7 +258,7 @@ enum Source {
     /// In-memory buffer
     Memory(Vec<u8>),
     /// Location in REPAK archive
-    Archive(u64, usize),
+    Archive(EntryIndex, usize),
 }
 
 /// Options for appending a file to a REPAK archive.
@@ -282,7 +290,7 @@ pub struct AppendOptions {
     pub checksums: Vec<Checksum> = vec![],
     pub compression: Option<CompressionAlgorithm> = None,
     pub encryption: Option<EncryptionAlgorithm> = None,
-}
+} //TODO: this translates to WritePipeline
 
 impl AppendOptions {
     #[must_use]
@@ -378,12 +386,14 @@ impl REPAK {
         let mut source_reader = BufReader::new(source_file);
 
         // Build up the checksumming, compression and encryption pipeline.
+        let write_pipeline =
+            write::WritePipeline::new(options.checksums, options.compression, options.encryption);
 
-        let checksum_header = ChecksumHeader {
-            checksums: options.checksums,
-        };
+        // let checksum_header = ChecksumHeader {
+        //     checksums: options.checksums,
+        // };
 
-        let reader = checksum_header.build_ingress_pipeline(source_reader);
+        // let reader = checksum_header.build_ingress_pipeline(source_reader);
 
         let compression_header = if let Some(compression_alg) = options.compression {
             let chosen_algorithm = if let CompressionAlgorithm::Best = compression_alg {
@@ -396,26 +406,28 @@ impl REPAK {
             None
         };
 
-        let reader = compression_header.map_or(reader, |h| h.build_ingress_pipeline(reader));
+        // source_reader simply reads the source file
+        // write_pipeline writes data to the repak file and calculates all headers
 
-        let encryption_header = options.encryption.map(EncryptionHeader::new);
+        // let reader = compression_header.map_or(reader, |h| h.build_ingress_pipeline(reader));
 
-        let reader = encryption_header.map_or(reader, |h| h.build_ingress_pipeline(reader));
+        // let encryption_header = options.encryption.map(EncryptionHeader::new);
 
-        // Now we have a reader that can process source file to target, doing
-        // all necessary processing steps and updating the headers.
+        // let reader = encryption_header.map_or(reader, |h| h.build_ingress_pipeline(reader));
 
-        let bytes_written = copy(&mut source_reader, &mut archive_file)?;
+        let bytes_written = copy(&mut source_reader, &mut write_pipeline)?;
 
+        // Now we can get all the status headers from the write_pipelne and update index entry.
         // self.index.add_entry(name, attributes, offset, size, )
 
         let entry = IndexEntry {
             offset: self.last_insertion_offset,
             size: bytes_written,
             name: id.clone(),
-            encryption: encryption_header,
-            compression: compression_header,
-            checksum: checksum_header,
+            attributes: vec![],
+            encryption: write_pipeline.encryption_header(),
+            compression: write_pipeline.compression_header(),
+            checksum: write_pipeline.checksum_header(),
             path: file.to_owned(), // Store original source file path
         };
 
@@ -497,35 +509,50 @@ impl REPAK {
         self.save_index()?;
     }
 
+    /// Save index into a separate file.
     /// Index is _ordered by Name_, so it makes easier to look up via binary search even
     /// if you do not apply any sorted containers and just read all entries into a Vec.
     #[throws]
-    fn save_index(&self) {
+    fn save_detached_index(&self) {
         let idxpath = self.file_path.with_extension("idpak");
         let mut idxfile = File::create(idxpath.clone())?;
 
         // Zstd compress the index
         let idxfile = if true {
-            Compressor::new(idxfile)
+            zstd::Compressor::new(idxfile)
         } else {
             idxfile
         };
 
         self.index.save(&mut idxfile)?;
+        self.index = IndexAttachment::Detached(self.index.0, idxpath);
+    }
 
-        drop(idxfile);
-        let offset = fs::metadata(idxpath.clone())?.len();
-
-        let mut idxfile = File::open(idxpath.clone())?;
+    #[throws]
+    fn save_attached_index(&self) {
+        let start_offset = fs::metadata(self.file_path)?.len();
         let mut pakfile = OpenOptions::new()
             .write(true)
             .open(self.file_path.clone())?;
         pakfile.seek(SeekFrom::End(0))?;
-        copy(&mut idxfile, &mut pakfile)?;
+
+        // Zstd compress the index
+        let pakfile = if true {
+            zstd::Compressor::new(pakfile) // the compressor should be writing to an existing write stream at proper position
+        } else {
+            pakfile
+        };
+
+        self.index.save(pakfile)?;
+
+        let end_offset = fs::metadata(self.file_path)?.len();
+
+        let offset = end_offset - start_offset;
 
         let buf = locator::make_index_locator(offset)?;
 
         pakfile.write_all(&buf)?;
+        self.index = IndexAttachment::Attached(self.index.0);
     }
 
     // Advanced api: extract payload, skip decryption, decompression, checksum verification.
