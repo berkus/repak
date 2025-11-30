@@ -79,6 +79,16 @@ impl EncryptionHeader {
             parameters: block_size_bits.to_le_bytes().to_vec(),
         }
     }
+
+    // Consume external data and save it to the REPAK file.
+    pub fn build_ingress_pipeline(&self, reader: impl Read) -> impl Read {
+        reader
+    }
+
+    // Take REPAK file contents and export them into their original form.
+    pub fn build_egress_pipeline(&self, writer: impl Write) -> impl Write {
+        writer
+    }
 }
 
 impl Ser for EncryptionHeader {

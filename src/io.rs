@@ -34,3 +34,25 @@ pub(crate) fn deser_string(r: &mut impl Read) -> String {
     r.read_exact(&mut data)?;
     String::from_utf8(data)?
 }
+
+impl<T: Ser> Ser for Vec<T> {
+    #[throws(Error)]
+    fn ser(&self, w: &mut impl Write) {
+        leb128::write::unsigned(w, u64::try_from(self.len())?)?;
+        for x in self {
+            x.ser(w)?;
+        }
+    }
+}
+
+impl<T: Deser> Deser for Vec<T> {
+    #[throws(Error)]
+    fn deser(r: &mut impl Read) -> Self {
+        let count = leb128::read::unsigned(r)?;
+        let mut vec = Vec::with_capacity(usize::try_from(count)?);
+        for _ in 0..count {
+            vec.push(T::deser(r)?);
+        }
+        vec
+    }
+}

@@ -4,27 +4,28 @@
 
 use {
     crate::{
-        checksum::{ChecksumHeader, Checksummer, ChecksummingRead},
-        compress::{CompressionHeader, compress_stream},
+        checksum::ChecksumHeader,
+        compress::CompressionHeader,
         encrypt::EncryptionHeader,
-        io::Deser,
+        index::{Attribute, IndexEntry, IndexHeader},
     },
-    byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt},
     culpa::{throw, throws},
-    io::{Ser, deser_string, leb128_usize, ser_string},
+    io::{Deser, Ser},
     std::{
-        collections::BTreeMap,
         fs::{self, File, OpenOptions},
         io::{BufReader, Cursor, Read, Seek, SeekFrom, Write, copy},
         path::{Path, PathBuf},
     },
+    zstd::bulk::Compressor,
 };
 
 mod checksum;
 mod compress;
 pub(crate) mod counting_writer;
 mod encrypt;
+mod index;
 mod io;
+mod locator;
 
 pub use {
     checksum::Checksum,
@@ -321,10 +322,10 @@ impl REPAK {
     ///
     /// Returns an error if the entry size cannot be converted to usize on 32-bit platforms.
     #[throws]
-    pub fn lookup<'a>(&'a self, id: &str) -> Option<Entry<'a>> {
+    pub fn lookup<'a>(&'a self, id: &str, attributes: &[Attribute]) -> Option<Entry<'a>> {
         self.index
-            .entries
-            .get(id)
+            .lookup(id, attributes)?
+            .as_ref()
             .map(|inner| -> Result<Entry<'a>, Error> {
                 Ok(Entry {
                     inner,
@@ -345,8 +346,14 @@ impl REPAK {
     /// Returns an error if the file already exists in the archive, the file
     /// cannot be read, compression/encryption fails, or I/O operations fail.
     #[throws]
-    pub fn append(&mut self, id: String, file: &Path, options: AppendOptions) {
-        if self.index.entries.contains_key(&id) {
+    pub fn append(
+        &mut self,
+        id: String,
+        attributes: Vec<String>,
+        file: &Path,
+        options: AppendOptions,
+    ) {
+        if self.index.entries.contains_key(&(id, attributes)) {
             throw!(Error::AlreadyExists(id));
         }
 
@@ -370,51 +377,41 @@ impl REPAK {
         let original_size = source_file.metadata()?.len();
         let mut source_reader = BufReader::new(source_file);
 
-        let (compression_header, final_size) = if let Some(compression_alg) = options.compression {
-            // Determine the actual algorithm to use
+        // Build up the checksumming, compression and encryption pipeline.
+
+        let checksum_header = ChecksumHeader {
+            checksums: options.checksums,
+        };
+
+        let reader = checksum_header.build_ingress_pipeline(source_reader);
+
+        let compression_header = if let Some(compression_alg) = options.compression {
             let chosen_algorithm = if let CompressionAlgorithm::Best = compression_alg {
                 pick_best_compression(file)?
             } else {
                 compression_alg
             };
-
-            // Apply compression using streaming
-
-            let (header, _) = compress_stream(
-                source_reader,
-                &mut archive_file,
-                chosen_algorithm,
-                original_size,
-            )?;
-
-            // Get the current position to calculate compressed size
-            let end_pos = archive_file.stream_position()?;
-            let compressed_size = end_pos - self.last_insertion_offset;
-
-            (Some(header), compressed_size)
+            Some(CompressionHeader::new(chosen_algorithm, original_size))
         } else {
-            // No compression, copy data directly
-
-            let bytes_written = copy(&mut source_reader, &mut archive_file)?;
-
-            (None, bytes_written)
-        };
-
-        // Create checksum header if checksums are specified
-        let checksum_header = if options.checksums.is_empty() {
             None
-        } else {
-            Some(ChecksumHeader {
-                checksums: options.checksums,
-            })
         };
 
-        // Create encryption header if encryption is specified
+        let reader = compression_header.map_or(reader, |h| h.build_ingress_pipeline(reader));
+
         let encryption_header = options.encryption.map(EncryptionHeader::new);
+
+        let reader = encryption_header.map_or(reader, |h| h.build_ingress_pipeline(reader));
+
+        // Now we have a reader that can process source file to target, doing
+        // all necessary processing steps and updating the headers.
+
+        let bytes_written = copy(&mut source_reader, &mut archive_file)?;
+
+        // self.index.add_entry(name, attributes, offset, size, )
 
         let entry = IndexEntry {
             offset: self.last_insertion_offset,
-            size: final_size,
+            size: bytes_written,
             name: id.clone(),
             encryption: encryption_header,
             compression: compression_header,
@@ -437,80 +434,82 @@ impl REPAK {
         // Data has already been written to the archive during append() calls.
         // We only need to append the index to the existing archive file.
 
-        // Sort entries by offset for index consistency
-        let mut sorted = self.index.entries.values().collect::<Vec<_>>();
-        sorted.sort_by(|a, b| a.offset.cmp(&b.offset));
+        // for entry in sorted {
+        //     println!("Sorted Entry: {entry:?}");
+        //     let infile = BufReader::new(File::open(entry.path.clone())?);
 
-        for entry in sorted {
-            println!("Sorted Entry: {entry:?}");
-            let infile = BufReader::new(File::open(entry.path.clone())?);
+        //     // Set up checksumming if needed
+        //     let checksummer = match &entry.checksum {
+        //         None => ChecksummingRead::new(infile, vec![]),
+        //         Some(_ch) => {
+        //             // Convert Checksum enum instances to boxed Checksummer trait objects
+        //             // This would need proper implementation based on how Checksum works
+        //             let checksummers: Vec<Box<dyn Checksummer>> = vec![];
+        //             ChecksummingRead::new(infile, checksummers)
+        //         }
+        //     };
 
-            // Set up checksumming if needed
-            let checksummer = match &entry.checksum {
-                None => ChecksummingRead::new(infile, vec![]),
-                Some(_ch) => {
-                    // Convert Checksum enum instances to boxed Checksummer trait objects
-                    // This would need proper implementation based on how Checksum works
-                    let checksummers: Vec<Box<dyn Checksummer>> = vec![];
-                    ChecksummingRead::new(infile, checksummers)
-                }
-            };
+        //     // Handle compression if needed
+        //     let reader: Box<dyn Read> = match entry.compression {
+        //         Some(CompressionHeader {
+        //             algorithm: CompressionAlgorithm::Deflate,
+        //             ..
+        //         }) => {
+        //             #[cfg(feature = "compress-deflate")]
+        //             {
+        //                 // Create a BufReader wrapper since Compressor expects BufRead
+        //                 // TODO:
+        //                 // let buf_reader = BufReader::new(checksummer);
+        //                 // Box::new(Compressor::deflate(buf_reader))
+        //                 Box::new(checksummer)
+        //             }
+        //             #[cfg(not(feature = "compress-deflate"))]
+        //             {
+        //                 Box::new(checksummer)
+        //             }
+        //         }
+        //         _ => Box::new(checksummer),
+        //     };
 
-            // Handle compression if needed
-            let reader: Box<dyn Read> = match entry.compression {
-                Some(CompressionHeader {
-                    algorithm: CompressionAlgorithm::Deflate,
-                    ..
-                }) => {
-                    #[cfg(feature = "compress-deflate")]
-                    {
-                        // Create a BufReader wrapper since Compressor expects BufRead
-                        // TODO:
-                        // let buf_reader = BufReader::new(checksummer);
-                        // Box::new(Compressor::deflate(buf_reader))
-                        Box::new(checksummer)
-                    }
-                    #[cfg(not(feature = "compress-deflate"))]
-                    {
-                        Box::new(checksummer)
-                    }
-                }
-                _ => Box::new(checksummer),
-            };
+        //     // Apply encryption if needed
+        //     let _reader = match &entry.encryption {
+        //         Some(EncryptionHeader {
+        //             algorithm: EncryptionAlgorithm::Xor,
+        //             ..
+        //         }) => {
+        //             // Since Encryptor expects BufRead, we need to wrap in BufReader
+        //             let buf_reader = BufReader::new(reader);
+        //             // Not properly implemented yet
+        //             Box::new(buf_reader)
+        //         }
+        //         _ => reader,
+        //     };
 
-            // Apply encryption if needed
-            let _reader = match &entry.encryption {
-                Some(EncryptionHeader {
-                    algorithm: EncryptionAlgorithm::Xor,
-                    ..
-                }) => {
-                    // Since Encryptor expects BufRead, we need to wrap in BufReader
-                    let buf_reader = BufReader::new(reader);
-                    // Not properly implemented yet
-                    Box::new(buf_reader)
-                }
-                _ => reader,
-            };
+        //     // Write to pakfile
+        //     pakfile.seek(SeekFrom::Start(entry.offset))?;
+        //     copy(&mut reader, &mut pakfile)?;
 
-            // Write to pakfile
-            // TODO:
-            // pakfile.seek(SeekFrom::Start(entry.offset))?;
-            // copy(&mut reader, &mut pakfile)?;
-
-            // @todo: update checksummer and encryptor output metadata in the index
-            // entry.checksums = checksums;
-        }
+        //     // @todo: update checksummer and encryptor output metadata in the index
+        //     // entry.checksums = checksums;
+        // }
 
         // Write the index to the archive file
         self.save_index()?;
     }
 
-    /// Index is ordered by Name, so it makes easier to look up via binary search even
+    /// Index is _ordered by Name_, so it makes easier to look up via binary search even
     /// if you do not apply any sorted containers and just read all entries into a Vec.
     #[throws]
     fn save_index(&self) {
         let idxpath = self.file_path.with_extension("idpak");
         let mut idxfile = File::create(idxpath.clone())?;
+
+        // Zstd compress the index
+        let idxfile = if true {
+            Compressor::new(idxfile)
+        } else {
+            idxfile
+        };
 
         self.index.ser(&mut idxfile)?;
 
@@ -524,249 +523,11 @@ impl REPAK {
         pakfile.seek(SeekFrom::End(0))?;
         copy(&mut idxfile, &mut pakfile)?;
 
-        let buf = make_index_locator(offset)?;
+        let buf = locator::make_index_locator(offset)?;
 
         pakfile.write_all(&buf)?;
     }
 
     // Advanced api: extract payload, skip decryption, decompression, checksum verification.
     // @todo ❌
-}
-
-#[throws(std::io::Error)]
-fn make_index_locator(offset: u64) -> Vec<u8> {
-    let n = 64 - u64::from(offset.leading_zeros());
-    // dbg!("Non-zero bits {}", n);
-    // let align_down = fn(x: u64) -> u64 { x & !0x7f };
-    let bsize = (n & !7) / 7;
-    let off = offset + bsize + 1;
-    // dbg!("Offset {} + {} + {} = {off} ({off:x})", offset, bsize, 1,);
-    let lenbuf = leb128_usize(off)? as u64;
-    // dbg!("Lenbuf {}", lenbuf);
-    let mut buf = vec![];
-    leb128::write::unsigned(&mut buf, offset + lenbuf).unwrap();
-    buf.reverse();
-    buf
-}
-
-#[cfg(test)]
-mod index_locator_tests {
-    use {super::make_index_locator, std::io::Cursor};
-
-    fn prep(offset: u64) -> (Vec<u8>, u64) {
-        let mut buf = make_index_locator(offset).expect("Shouldn't fail");
-        buf.reverse();
-        let check = leb128::read::unsigned(&mut Cursor::new(&buf)).unwrap();
-        buf.reverse();
-        (buf, check)
-    }
-
-    // 126 - 1b
-    // 126+1 - 1b
-    // So the end offset is 127 (126 index size + 1 locator size)
-    #[test]
-    fn locator_close_to_1byte() {
-        let (buf, check) = prep(126);
-        assert_eq!(buf, vec![0x7f]);
-        assert_eq!(check, 127);
-    }
-
-    // 127 - 1b
-    // 127+1 - 2b
-    // 127+2 - 2b
-    // So the end offset is 129 (127 index size + 2 locator size)
-    #[test]
-    fn locator_edgecase_1byte() {
-        let (buf, check) = prep(127);
-        assert_eq!(buf, vec![0x01, 0x81]);
-        assert_eq!(check, 129);
-    }
-
-    // @todo: This fails, but should not - 16383 should fit into 2 bytes serialization
-    #[test]
-    fn locator_close_to_2bytes() {
-        let (buf, check) = prep(16381);
-        assert_eq!(buf, vec![0x7f, 0xff]);
-        assert_eq!(check, 16383);
-    }
-
-    // 2-octet VLQ (0xFF7F) is 0b_11_1111_1111_1111 = 0x3FFE = 16382
-    // 16382 - 2b
-    // 16382+2 - 3b
-    // 16382+3 - 3b
-    // So the end offset is 16385 (16382 index size + 3 locator size)
-    #[test]
-    fn locator_edgecase_2bytes() {
-        let (buf, check) = prep(16382);
-        assert_eq!(buf, vec![0x01, 0x80, 0x81]);
-        assert_eq!(check, 16385);
-    }
-
-    // 3-octet VLQ (0xFF_FF_7F) is 0b_1_1111_1111_1111_1111_1111 = 0x1FFFFF = 2097151
-    // 2097151 - 3b
-    // 2097151+3 - 4b
-    // 2097151+4 - 4b
-    // So the end offset is 2097155 (2097151 index size + 4 locator size)
-    #[test]
-    fn locator_edgecase_3bytes() {
-        let (buf, check) = prep(2097151);
-        assert_eq!(buf, vec![0x01, 0x80, 0x80, 0x83]);
-        assert_eq!(check, 2097155);
-    }
-
-    #[test]
-    fn locator_close_to_10bytes() {
-        let (buf, check) = prep(u64::MAX / 4);
-        assert_eq!(
-            buf,
-            vec![0x40, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x88]
-        );
-        assert_eq!(check, u64::MAX / 4 + 9);
-    }
-
-    #[test]
-    fn locator_edgecase_10bytes() {
-        let (buf, check) = prep(u64::MAX / 10 * 9);
-        assert_eq!(
-            buf,
-            vec![0x01, 0xe6, 0xb3, 0x99, 0xcc, 0xe6, 0xb3, 0x99, 0xcc, 0xeb]
-        );
-        assert_eq!(check, u64::MAX / 10 * 9 + 10);
-    }
-}
-
-#[derive(Default)]
-struct IndexHeader {
-    entries: BTreeMap<String, IndexEntry>,
-    checksum: ChecksumHeader,
-}
-
-impl Ser for IndexHeader {
-    #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        // @todo Checksum everything we write here! (w should be wrapped in a ChecksummingWrite)
-        // @todo Add zstd compression after checksumming!
-        w.write_all(b"REPAK")?;
-        w.write_u8(0x1)?; // Version 1
-        w.write_u16::<LittleEndian>(0u16)?;
-        leb128::write::unsigned(w, self.entries.len() as u64)?;
-        for entry in &mut self.entries.values() {
-            println!("Entry: {entry:?}");
-            entry.ser(w)?;
-        }
-        self.checksum.ser(w)?;
-    }
-}
-
-impl Deser for IndexHeader {
-    #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        // wrap r into a ChecksummingRead with all checksummers enabled, to verify the integrity of the index
-        let mut buf = [0u8; 5];
-        r.read_exact(&mut buf)?;
-        // if first four bytes are "0x28, 0xB5, 0x2F, 0xFD" then it's `zstd` compressed
-        // if &buf == b"\x28\xb5\x2f\xfd" { // @todo
-        //    let mut decoder = zstd::Decoder::new(r)?;
-        //   let mut decoded = Vec::new();
-        // decoder.read_to_end(&mut decoded)?;
-        // r = Cursor::new(decoded);
-        // return IndexHeader::deser(r); // call itself to parse decompressed data
-        // }
-        if &buf != b"REPAK" {
-            throw!(Error::Deser("Not a REPAK archive".to_string()));
-        }
-        let version = r.read_u8()?;
-        if version != 1 {
-            throw!(Error::Deser(format!(
-                "Unsupported REPAK version 0x{version:2x}"
-            )));
-        }
-        let reserved = r.read_u16::<LittleEndian>()?;
-        if reserved != 0 {
-            throw!(Error::Deser("Reserved field is not zero".to_string()));
-        }
-        let count = leb128::read::unsigned(r)?;
-
-        let mut entries = BTreeMap::new();
-        //entries.extend_reserve(count);
-        for _ in 0..count {
-            let entry = IndexEntry::deser(r)?;
-            entries.insert(entry.name.clone(), entry);
-        }
-        let checksum = ChecksumHeader::deser(r)?;
-
-        // @todo validate checksums
-
-        IndexHeader { entries, checksum }
-    }
-}
-
-#[derive(Default, Debug)] // temp?
-struct IndexEntry {
-    offset: u64,
-    size: u64,
-    name: String,
-    encryption: Option<EncryptionHeader>,
-    compression: Option<CompressionHeader>,
-    checksum: Option<ChecksumHeader>,
-
-    path: PathBuf,
-}
-
-impl Ser for IndexEntry {
-    #[throws(Error)]
-    fn ser(&self, w: &mut impl Write) {
-        let flags = u64::from(self.encryption.is_some())
-            | (u64::from(self.compression.is_some()) << 1)
-            | (u64::from(self.checksum.is_some()) << 2);
-
-        leb128::write::unsigned(w, self.offset)?;
-        leb128::write::unsigned(w, self.size)?;
-        leb128::write::unsigned(w, flags)?;
-        ser_string(w, &self.name)?;
-        if let Some(encryption) = &self.encryption {
-            encryption.ser(w)?;
-        }
-        if let Some(compression) = &self.compression {
-            compression.ser(w)?;
-        }
-        if let Some(checksum) = &self.checksum {
-            checksum.ser(w)?;
-        }
-    }
-}
-
-impl Deser for IndexEntry {
-    #[throws(Error)]
-    fn deser(r: &mut impl Read) -> Self {
-        let offset = leb128::read::unsigned(r)?;
-        let size = leb128::read::unsigned(r)?;
-        let flags = leb128::read::unsigned(r)?;
-        let name = deser_string(r)?;
-        let encryption = if flags & 0x0001 != 0 {
-            Some(EncryptionHeader::deser(r)?)
-        } else {
-            None
-        };
-        let compression = if flags & 0x0002 != 0 {
-            Some(CompressionHeader::deser(r)?)
-        } else {
-            None
-        };
-        let checksum = if flags & 0x0004 != 0 {
-            Some(ChecksumHeader::deser(r)?)
-        } else {
-            None
-        };
-
-        Self {
-            offset,
-            size,
-            name: name.clone(),
-            encryption,
-            compression,
-            checksum,
-            path: PathBuf::from(name),
-        }
-    }
 }

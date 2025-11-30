@@ -33,9 +33,26 @@ pub use sha3_256::SHA3;
 #[cfg(feature = "checksum-xxhash3")]
 pub use xxhash3_128::Xxhash3;
 
+/// A header storing checksummers information in REPAK file.
+///
+/// It is used for both payloads and the Index.
 #[derive(Default, Debug)]
 pub(crate) struct ChecksumHeader {
     pub(crate) checksums: Vec<Checksum>,
+}
+
+impl ChecksumHeader {
+    // Consume external data and save it to the REPAK file.
+    pub fn build_ingress_pipeline(&self, reader: impl Read) -> impl Read {
+        // loop self.checksums and wrap reader into an instance of each checksummer
+        // TODO: must make each reader update corresponding Checksum in the Vec
+        reader
+    }
+
+    // Take REPAK file contents and export them into their original form.
+    pub fn build_egress_pipeline(&self, writer: impl Write) -> impl Write {
+        writer
+    }
 }
 
 impl Ser for ChecksumHeader {
