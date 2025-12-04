@@ -52,6 +52,8 @@ Entries are variable sized,
 | ?      | ?               | CompressionHeader | Optional, present if Compression bit is set in Flags                                                                                                                                                               |
 | ?      | ?               | ChecksumHeader    | Optional, present if Checksum bit is set in Flags                                                                                                                                                                  |
 
+## Attributes (wip)
+
 Attributes are key-value pairs, sorted by key, where key is a String and value is a byte array.
 
 | Offset | Size            | Content           | Description                                                                                                                                                                                                |
