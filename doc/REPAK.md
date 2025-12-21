@@ -5,8 +5,6 @@ Asset library format similar in idea to Quake PAK or DOOM WAD files. The file is
 | Offset   | Contents                                                                                                   |
 | -------- | ---------------------------------------------------------------------------------------------------------- |
 | 0        | Binary contents of assets, one after another without spaces.                                               |
-| ?        | Attribute interned key table                                                                               |
-| ?        | Attribute interned value table                                                                             |
 | X        | Compressed asset index.                                                                                    |
 | File end | Offset of index from the end of file recorded in rULEB64 format (a specific subset of VLQ encoding), seeking this number of bytes from the end of file should land you at X, the very beginning of the index. |
 
@@ -16,7 +14,11 @@ Asset library format similar in idea to Quake PAK or DOOM WAD files. The file is
 | ------ | ------ | --------------- | ---------------------------------------------------------------------------------------------------- |
 | 0      | 5      | "REPAK"         | Format marker                                                                                        |
 | 5      | (uleb!)| 0x01            | Version                                                                                              |
-| ?      | ?      | ChecksumHeader  | Checksum structure for the Index, see below for format. The contents of the header starting from `count` below and up until but not including the index locator are checksummed. |
+| ?      | ?      | ChecksumHeader  | Checksum structure for the Index, see below for format. The contents of the header starting from the next field (size of attrib key atoms) and up until but not including the index locator are checksummed. |
+| ?      | uleb64 | AttribKeyAtoms  | Size of attribute keys internment table |
+|        | ...    | table itself    | Attribute interned key table (read into a Vec<String>) |
+| ?      | uleb64 | AttribValueAtoms  | Size of attribute values cbor internment table |
+|        | ...    | table itself    | Attribute interned value table (read into a Vec<Vec<u8>>) |
 | ?      | uleb64 | count           | Number of following index entries (included in the checksum)                                         |
 | ?      |        | entries\[count] | Variable-sized entries array (included in the checksum)                                              |
 
@@ -59,22 +61,19 @@ Attributes are (optional) key-value pairs, sorted by key, where key is a String 
 
 | Offset | Size            | Content                          | Description                    |
 | ------ | --------------- | -------------------------------- | ------------------------------ |
-| 0      | uleb64          | Offset of the key string from start of strings internment table | |
-| ?      | uleb64          | Offset of the value CBOR payload | |
+| 0      | uleb64          | Index in the strings internment table | |
+| ?      | uleb64          | Index in the value CBOR payload | |
 
-^^ offset or index? indices only work after internment table is reconstructed, offsets can be used directly from the file while reading.
-
-Attribute keys are stored in a separate interner array.
+? When reading the index, could de-intern to &str over interner storage, to make it direct, fast and not too memory-consuming.
+Make a Vec<&str>? When saving need to re-construct the two-phase interner to recalculate freqs etc.
 
 (FIXME: limit to 512 attributes of up to 1K size?)
 (TODO: attributes compression scheme for repeated/reusable attributes - store only indices/offsets into the attributes table, which is a separate deduplicated entity - example below shows huge redundancy)
 (TODO: have a separate attributes file/db? - this is production thing, final assets should probably not have that in storage)
-(TODO: use cbor to store the value binary? can have semantics/types then, use canonical cbor for reproducible layout)
 
-Also possible: interned key index, interned value index
 Intern tables: keys table consisting of \[key length uleb, key + \0] pairs serialized. value table consisting of \[value length uleb, value]
 (probably fuck C and don't use \0 anywhere)
-
+(TODO: compress the tables? makes it harder to read while reading a file... but ffs we compress everything anyway)
 
 An example asset categorization, that may be represented via attributes, as json:
 
