@@ -6,21 +6,31 @@ Asset library format similar in idea to Quake PAK or DOOM WAD files. The file is
 | -------- | ---------------------------------------------------------------------------------------------------------- |
 | 0        | Binary contents of assets, one after another without spaces.                                               |
 | X        | Compressed asset index.                                                                                    |
-| File end | Offset of index from the end of file recorded in rULEB64 format (a specific subset of VLQ encoding), seeking this number of bytes from the end of file should land you at X, the very beginning of the index. |
+| File end | Index locator: Offset of index from the end of file recorded in rULEB64 format (a specific subset of VLQ encoding), seeking this number of bytes from the end of file should land you at X, the very beginning of the index. |
+
+It is easy to read the index, detach it from the main file, append new files, and then reattach the index back because of the `Index locator`.
+
+# Payloads
+
+Data payloads are checksummed, compressed, then encrypted and placed into the REPAK file starting from the very beginning, one after another, in sequential order without any spacing or padding.
+
+Some compression and encryption algorithms may impose their own limits on padding or structuring the data - these are followed per-algorithm to make these blobs extractable.
 
 # REPAK index
 
 | Offset | Size   | Content         | Description                                                                                          |
 | ------ | ------ | --------------- | ---------------------------------------------------------------------------------------------------- |
 | 0      | 5      | "REPAK"         | Format marker                                                                                        |
-| 5      | (uleb!)| 0x01            | Version                                                                                              |
+| 5      | uleb64 | 0x01            | Version                                                                                              |
 | ?      | ?      | ChecksumHeader  | Checksum structure for the Index, see below for format. The contents of the header starting from the next field (size of attrib key atoms) and up until but not including the index locator are checksummed. |
-| ?      | uleb64 | AttribKeyAtoms  | Size of attribute keys internment table |
-|        | ...    | table itself    | Attribute interned key table (read into a Vec<String>) |
-| ?      | uleb64 | AttribValueAtoms  | Size of attribute values cbor internment table |
-|        | ...    | table itself    | Attribute interned value table (read into a Vec<Vec<u8>>) |
-| ?      | uleb64 | count           | Number of following index entries (included in the checksum)                                         |
-| ?      |        | entries\[count] | Variable-sized entries array (included in the checksum)                                              |
+| ?      | uleb64 | AttribKeyAtomsLen  | Size of attribute keys internment table |
+|        | AttribKeyAtomsLen | table itself  | Attribute interned key table (read into a Vec<String>). Also contains interned asset names* |
+| ?      | uleb64 | AttribValueAtomsLen  | Size of attribute values cbor internment table |
+|        | AttribValueAtomsLen  | table itself    | Attribute interned value table (read into a Vec<Vec<u8>>) |
+| ?      | uleb64 | count           | Number of following index entries (included in the checksum) |
+| ?      |        | entries\[count] | Variable-sized entries array (included in the checksum) |
+
+* Asset names are UTF-8 names of the assets. There are no limits on how asset names are structured as long as they are valid UTF-8 strings. One can use plain names, paths, dot delimited names, whatever works.
 
 Immediately following the last index entry is the index offset (locator) field at the file end.
 
@@ -47,22 +57,21 @@ Entries are variable sized,
 | -      | flags & 0x0002  | Compression bit   | Compression header is present and defines used compression for the data blob. The blobs do not have any additional fields, they are just payload. |
 | -      | flags & 0x0004  | Checksum bit      | Checksumming header is present and lists used checksumming methods and calculated payload checksums. |
 | -      | All other flags | Reserved          | Must not be used.                                |
-| ?      | uleb64          | Name length       | Length of the following name, there are no \0 terminators. |
-| ?      | Name length     | Name              | UTF-8 name of the asset.<br><br>There are no limits on how asset names are structured as long as they are valid UTF-8 strings.<br><br>One can use plain names, paths, dot delimited names, whatever works. |
-|        | uleb64 | Attributes count | How many attributes does this entry have, can be 0 |
-|        | Attributes count | Attributes | An array of Attribute entities, sorted by key |
+| ?      | uleb64          | Name index        | Index of asset name in the asset key intern table. |
+|        | uleb64          | Attributes count  | How many attributes does this entry have, can be 0 |
+|        | Attributes count | Attributes       | An array of Attribute entities, sorted by key |
 | ?      | ?               | EncryptionHeader  | Optional, present if Encryption bit is set in Flags  |
 | ?      | ?               | CompressionHeader | Optional, present if Compression bit is set in Flags |
 | ?      | ?               | ChecksumHeader    | Optional, present if Checksum bit is set in Flags    |
 
-## Attributes (wip)
+## Attributes
 
 Attributes are (optional) key-value pairs, sorted by key, where key is a String and value is a byte array containing CBOR payload.
 
 | Offset | Size            | Content                          | Description                    |
 | ------ | --------------- | -------------------------------- | ------------------------------ |
 | 0      | uleb64          | Index in the strings internment table | |
-| ?      | uleb64          | Index in the value CBOR payload | |
+| ?      | uleb64          | Index in the value CBOR payload internment table | |
 
 ? When reading the index, could de-intern to &str over interner storage, to make it direct, fast and not too memory-consuming.
 Make a Vec<&str>? When saving need to re-construct the two-phase interner to recalculate freqs etc.
@@ -218,14 +227,6 @@ K12_256_Payload:
 | 0      | uleb64 | size_seed        | Size of the following seed byte array                                       |
 | ?      | ?      | seed             | The seed used for starting K12 as a byte array to initialize k12 algorithm. |
 | ?      | 32     | hash_output      | The 256 bit binary hash output                                              |
-
-# Payloads
-
-Data payloads are checksummed, compressed, then encrypted and placed into the REPAK file starting from the very beginning, one after another, in sequential order without any spacing or padding.
-
-Some compression and encryption algorithms may impose their own limits on padding or structuring the data - these are followed per-algorithm to make these blobs extractable.
-
-It is easy to read the index, detach it from the main file, append new files, and then reattach the index back because of the `Index locator`.
 
 # Index locator
 
